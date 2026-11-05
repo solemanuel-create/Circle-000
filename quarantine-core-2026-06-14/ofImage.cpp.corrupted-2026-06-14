@@ -1,0 +1,105 @@
+#include "ofApp.h"
+
+void ofApp::setup() {
+	ofSetWindowTitle("Glitch Retangulos");
+	ofSetBackgroundColor(0);
+	ofSetFrameRate(60);
+
+	string caminho = "C:/Users/sole8/OneDrive/Imagens/f1017478264.jpg";
+
+	if (!img.load(caminho)) {
+		ofSystemAlertDialog("Erro", "Nao achei:\n" + caminho);
+		ofExit();
+		return;
+	}
+
+	buffer.allocate(img.getWidth(), img.getHeight(), OF_IMAGE_COLOR);
+	buffer.setFromPixels(img.getPixels());
+
+	srcPixels = &img.getPixels();
+	dstPixels = &buffer.getPixels();
+	w = img.getWidth();
+	h = img.getHeight();
+
+	for (int i = 0; i < 20; i++) {
+		addRect(ofRandom(w), ofRandom(h), ofRandom(40, 120), ofRandom(40, 120));
+	}
+}
+
+void ofApp::update() {
+	if (!img.isAllocated()) return;
+
+	*dstPixels = *srcPixels;
+	unsigned char * srcData = srcPixels->getData();
+	unsigned char * dstData = dstPixels->getData();
+
+	for (int i = 0; i < rects.size(); i++) {
+		rects[i].x += dir[i].x * 2.0;
+		rects[i].y += dir[i].y * 2.0;
+
+		if (rects[i].x < -rects[i].width) rects[i].x = w;
+		if (rects[i].y < -rects[i].height) rects[i].y = h;
+		if (rects[i].x > w) rects[i].x = -rects[i].width;
+		if (rects[i].y > h) rects[i].y = -rects[i].height;
+
+		float cx = rects[i].x + rects[i].width * 0.5f;
+		float cy = rects[i].y + rects[i].height * 0.5f;
+		float dx = cx - mouse.x;
+		float dy = cy - mouse.y;
+		float distSq = dx * dx + dy * dy;
+		float scale = ofMap(distSq, 0, 360000, 3.0f, 0.4f, true);
+
+		int rw = int(rects[i].width * scale);
+		int rh = int(rects[i].height * scale);
+
+		int x0 = ofClamp(int(rects[i].x), 0, w - 1);
+		int y0 = ofClamp(int(rects[i].y), 0, h - 1);
+		int x1 = ofClamp(int(rects[i].x + rw), 0, w);
+		int y1 = ofClamp(int(rects[i].y + rh), 0, h);
+
+		for (int y = y0; y < y1; y++) {
+			int rowIndex = y * w * 3;
+			for (int x = x0; x < x1; x++) {
+				int idx = rowIndex + x * 3;
+				dstData[idx] = 255 - srcData[idx];
+				dstData[idx + 1] = srcData[idx + 1];
+				dstData[idx + 2] = 255 - srcData[idx + 2];
+			}
+		}
+	}
+	buffer.setFromPixels(*dstPixels);
+}
+
+void ofApp::draw() {
+	if (!buffer.isAllocated()) return;
+
+	buffer.draw(0, 0);
+	ofNoFill();
+	ofSetColor(255, 0, 255, 180);
+	for (auto & r : rects) {
+		ofDrawRectangle(r);
+	}
+	ofSetColor(255);
+	ofDrawBitmapString("FPS: " + ofToString(ofGetFrameRate(), 0), 10, 20);
+}
+
+void ofApp::mouseMoved(int x, int y) {
+	mouse.set(x, y);
+}
+
+void ofApp::keyPressed(int key) {
+	if (key == 'a') addRect(ofRandom(w), ofRandom(h), ofRandom(40, 120), ofRandom(40, 120));
+	if (key == 'r') {
+		rects.clear();
+		dir.clear();
+		for (int i = 0; i < 20; i++)
+			addRect(ofRandom(w), ofRandom(h), ofRandom(40, 120), ofRandom(40, 120));
+	}
+}
+
+void ofApp::addRect(float x, float y, float w, float h) {
+	rects.push_back(ofRectangle(x, y, w, h));
+	float angle = ofRandom(TWO_PI);
+	float speed = ofRandom(1.5, 3.5);
+	dir.push_back(ofVec2f(cos(angle) * speed, sin(angle) * speed));
+}

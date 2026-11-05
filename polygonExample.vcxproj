@@ -225,11 +225,53 @@
       <DebugInformationFormat Condition="'$(Configuration)|$(Platform)'=='Release|ARM64EC'">OldStyle</DebugInformationFormat>
     </ClCompile>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
+    <ClCompile>
+      <!-- $(KINECTSDK10_DIR) vem do instalador do Kinect SDK v1.8 como variavel
+           de ambiente de maquina; o MSBuild le variaveis de ambiente como
+           propriedades, entao nao ha caminho hardcoded aqui. Ja foi provado:
+           C:\Program Files\Microsoft SDKs\Kinect\v1.8\ (com barra no fim). -->
+      <AdditionalIncludeDirectories>$(OF_ROOT)\addons\ofxGui\src;$(OF_ROOT)\addons\ofxOpenCv\src;$(OF_ROOT)\addons\ofxOpenCv\libs\opencv\include;$(OF_ROOT)\addons\ofxOpenCv\libs\opencv\include\include;$(KINECTSDK10_DIR)inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Link>
+      <AdditionalLibraryDirectories>$(OF_ROOT)\addons\ofxOpenCv\libs\opencv\lib\vs\x64\Debug;$(KINECTSDK10_DIR)lib\amd64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>%(AdditionalDependencies);opencv_world4110d.lib;opencv_img_hash4110d.lib;libprotobufd.lib;ittnotifyd.lib;Kinect10.lib</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Link>
+      <AdditionalLibraryDirectories>$(OF_ROOT)\addons\ofxOpenCv\libs\opencv\lib\vs\x64\Release;$(KINECTSDK10_DIR)lib\amd64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <!-- O opencv_world traz o cap_dshow.obj, uma segunda copia da classe
+           videoInput. Depois do %(AdditionalDependencies) para que o
+           videoInput.lib do openFrameworks ganhe: se a copia do OpenCV
+           responder as chamadas do ofVideoGrabber, ela escreve fora do
+           objeto dele (layouts diferentes) e o app morre ao acaso.
+           Kinect10.lib e so o import lib do Kinect10.dll do System32; nao
+           briga com ninguem, mas o runtime exige o SDK instalado. -->
+      <AdditionalDependencies>%(AdditionalDependencies);opencv_world4110.lib;opencv_img_hash4110.lib;libprotobuf.lib;ittnotify.lib;Kinect10.lib</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="$(OF_ROOT)\addons\ofxGui\src\*.cpp">
+      <ObjectFileName>$(IntDir)Build\ofxGui\%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClInclude Include="$(OF_ROOT)\addons\ofxGui\src\*.h" />
+    <ClCompile Include="$(OF_ROOT)\addons\ofxOpenCv\src\*.cpp">
+      <ObjectFileName>$(IntDir)Build\ofxOpenCv\%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClInclude Include="$(OF_ROOT)\addons\ofxOpenCv\src\*.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\cvDevices.cpp" />
+    <ClCompile Include="src\kinect1473.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\ofApp.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\cvDevices.h" />
+    <ClInclude Include="src\kinect1473.h" />
     <ClInclude Include="src\ofApp.h" />
   </ItemGroup>
   <ItemGroup>

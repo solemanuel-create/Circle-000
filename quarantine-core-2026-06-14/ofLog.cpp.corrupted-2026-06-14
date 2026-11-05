@@ -1,0 +1,32 @@
+void ofApp::setup() {
+	ofSetWindowTitle("Ctrl-v-0 SAFE");
+	ofSetBackgroundColor(0);
+	ofSetFrameRate(60);
+
+	// ENDEREÇO DA IMAGEM DE REFERÊNCIA - AJUSTADO
+	string caminho = "C:/Users/sole8/OneDrive/Imagens/f1017478264.jpg";
+
+	bool ok = img.load(caminho);
+
+	if (!ok || !img.isAllocated()) {
+		ofSystemAlertDialog("ERRO: Não achei a imagem em:\n" + caminho + "\n\nVerifica se o arquivo existe e tem extensão .jpg ou .png");
+		ofExit();
+		return;
+	}
+
+	buffer.allocate(img.getWidth(), img.getHeight(), OF_IMAGE_COLOR);
+	buffer.setFromPixels(img.getPixels());
+
+	srcPixels = &img.getPixels();
+	dstPixels = &buffer.getPixels();
+	w = img.getWidth();
+	h = img.getHeight();
+
+	for (int i = 0; i < 20; i++) {
+		addRect(
+			ofRandom(w),
+			ofRandom(h),
+			ofRandom(40, 120),
+			ofRandom(40, 120));
+	}
+}
