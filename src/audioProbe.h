@@ -58,3 +58,24 @@ bool audioProbeAtiva();
 // imprime cada resultado em stderr assim que ele existe, antes de ir para a
 // proxima API: se uma rota derrubar o processo, as anteriores ja foram lidas.
 void audioProbeRun(AudioProbeReport& rep);
+
+// ==================== teste de emissao (pacote 5, passo 2) ====================
+// A varredura acima respondeu "que transporte abre". Ela devolveu silencio, e
+// silencio nao pode ser ouvido, por isso a pergunta que ficou foi a que so uma
+// pessoa responde: sai alguma coisa da caixa desta maquina.
+//
+// `CV0_AUDIOEMIT=<segundos>` poe na rota que abrir um sinus de 440 Hz a
+// -18 dBFS. O numero nao e escolha de gosto: -18 e o travao de ensaio, meio
+// sinal de fundo de um palco, e se a sala estiver calada o suficiente para nao
+// se ouvir um 440 a -18 entao o que esta em causa nao e o transporte e o
+// monitor. O valor da variavel e a duracao, em segundos, cortada a 1..30.
+//
+// O que este teste prova e uma coisa e nao prova outra, e o fonte diz as duas:
+// prova que o motorista escreveu N amostras de uma forma de onda com um pico
+// medido dentro do proprio callback; nao prova que o som saiu de lado nenhum.
+// A unica saida honesta dele e "ouvi" ou "nao ouvi".
+bool audioEmitAtiva();
+
+// Corre o teste. Bloqueia a main thread pela duracao pedida. Inerte sem a
+// variavel: nenhuma linha daqui existe, nenhum transporte e aberto.
+void audioEmitRun();

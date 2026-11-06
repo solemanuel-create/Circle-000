@@ -199,6 +199,7 @@ Outras variaveis de runtime, todas com a mesma regra de inercia:
 | `CV0_BLOBMATCH` | limiar de casamento de ids em distancia normalizada (padrao `0.10`, cortado a `0.02..0.60`); sem a variavel o valor e o de sempre | `src/ofApp.cpp` (`setup`), `BlobRegistry::match_` |
 | `CV0_BLOBAREA` | corte de area minima (`minAreaPct`) para a varredura da fragmentacao; cortado a `0.001..0.05`, que e a faixa da linha do painel, e imprime o valor de palco que substituiu | `src/ofApp.cpp` (`setup`), `CvParams::minAreaPct` |
 | `CV0_MIDIAGE` | **agente, nao sonda**: idade em frames a que um corpo da a nota, cortado a `0..60`; `0` repoe exatamente o gatilho antigo e e por isso que existe, para o A/B ter um lado velho. Padrao compilado `3` | `src/midiOut.cpp` (`setup`), `CV_MIDI_PULSO_IDADE` |
+| `CV0_AUDIOEMIT` | **teste, nao sonda de transporte**: o valor e a duracao em segundos (cortada a `1..30`; texto que nao e numero cai em 5 e diz isso na linha de abertura). Poe na rota que abrir um sinus de 440 Hz a -18 dBFS, constantes chumbadas no fonte | `src/audioProbe.cpp` (`audioEmitRun`), chamado em `ofApp::setup()` |
 
 O `CV0_BLOBMATCH` e o `CV0_BLOBAREA` nao sao sondas: mudam o comportamento. So
 aparecem em uma tabela porque a medicao das duas alavancas so existe junto com a
@@ -229,6 +230,38 @@ nele; a curva imprimiu `1:49% 2:30% 3:21% 4:16% 8:6% 16:2%` sobre 547 nascimento
 reais, ou seja, o debounce nao esta a suprimir corpos, esta a suprimir fragmentos
 que duravam menos de um terco de segundo. A invariante do ledger fecha em todas
 as janelas (`desc 0`, `morre + saidos + pendentes = nascidos - forcados`).
+
+O `CV0_AUDIOEMIT` existe porque a varredura de transporte devolveu silencio, e
+silencio nao pode ser ouvido: a pergunta que sobrou nao era "que rota abre" e sim
+"sai alguma coisa da caixa", e essa so uma pessoa na sala responde. Medido numa
+janela de 5 s, com o exe de um OutDir alternativo:
+
+```
+EMISSAO: asio | ASIO4ALL v2 | 48000 Hz | float32 | 2 canais | buffer 512 quadros
+EMISSAO: 5 s de 440 Hz a -18.0 dBFS = amplitude 0.1258 (contagem de float32)
+EMISSAO: callbacks 463 em 5.00 s | relogio do stream 4.93 s | amostras escritas
+         237056 (= 4.93 s x taxa) | pico escrito 0.1258
+```
+
+Tres coisas dessa leitura. O sinus nasce de um **contador de amostras**, nao de um
+acumulador de fase em ponto flutuante: somar um incremento por amostra a 48 kHz
+perde o ultimo digito e o que se ouve entao e o batimento do acumulo, nao o
+transporte — com o contador a frequencia e exata por construcao. O `pico escrito`
+e `0.1258`, que e `10^(-18/20)` ao centesimo: a medicao e feita sobre a mesma
+conta que escreve no buffer, portanto nao ha ganho escondido entre o numero e o
+que foi entregue ao motorista. E o `relogio do stream` andou `4.93 s` em `5.00 s`
+de parede, com `237056 = 463 x 512` — o transporte consumiu em tempo real, nao
+ficou a engolir o mesmo bloco.
+
+O teste tem as duas acusacoes proprias (`relogio < 0.2 x parede` e `amostras <
+0.5 x parede x taxa`) porque um "pico escrito" alto sobre um stream que nao anda
+e um numero bonito sobre silencio; nenhuma disparou. O controle negativo tambem
+foi feito: sem a variavel, 8 s de app vivo e **zero linhas `[audio]`**.
+
+O que nada disso prova e o que importa. O pico e nosso, medido no buffer que nos
+escrevemos; a rota WASAPI/DS nem foi tentada porque o laco para na primeira que
+abre, e a saida fisica do ASIO4ALL e um ajuste do painel dele que este codigo nao
+le. A unica linha que fecha o pacote 5 nao sai do stderr: e ele a dizer se ouviu.
 
 Duas regras que nasceram de sondas que mentiram sem querer, e valem para
 qualquer sonda de igualdade desta arvore:

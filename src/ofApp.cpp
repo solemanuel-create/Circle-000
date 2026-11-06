@@ -108,6 +108,14 @@ void ofApp::setup() {
 	// volta sem fazer nada.
 	audioProbeRun(audioProbe);
 
+	// O teste de emissao vem logo a seguir pela mesma razao da varredura e com
+	// um motivo a mais: a varredura devolveu silencio, e silencio nao se ouve.
+	// Aqui o buffer do motorista leva um sinus de 440 Hz a -18 dBFS durante a
+	// duracao pedida na variavel. Bloqueia a main thread exatamente por essa
+	// duracao e por isso acontece antes de qualquer camera ligar. Sem
+	// CV0_AUDIOEMIT a funcao le a variavel, ve que nao existe e volta.
+	audioEmitRun();
+
 	// A sonda de MIDI vem depois da de transporte e antes da camera pelo mesmo
 	// motivo: cada uma bloqueia a main thread por ~1 s por cabo e fala em
 	// stderr no fim do proprio turno. Sem CV0_MIDIPROBE a funcao so le a

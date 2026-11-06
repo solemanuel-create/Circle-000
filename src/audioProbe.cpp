@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -266,9 +267,177 @@ namespace {
 		}
 	}
 
-}
+	// ==================== teste de emissao ====================
+	// O sinus vive num contador de amostras, nao num acumulador de fase em
+	// ponto flutuante: somar um incremento por amostra durante cinco segundos a
+	// 48 kHz perderia o ultimo digito e o que se ouviria era um batimento do
+	// proprio acumulo, nao do transporte. Assim a frequencia e exata por
+	// construcao e o pico medido e o pico escrito.
+	const double EMIT_PI = 3.14159265358979323846;
+	const double EMIT_HZ = 440.0;
+	const double EMIT_DBFS = -18.0;
+	const int EMIT_BUFFER = 512;
+	const double EMIT_MIN_S = 1.0;
+	const double EMIT_MAX_S = 30.0;
+
+	struct EmitState {
+		std::atomic<long> callbacks{ 0 };
+		std::atomic<long> amostras{ 0 };
+		long escrito = 0;         // so a thread do driver le e mexe
+		double pico = 0.0;        // |amostra| maximo realmente escrita
+		double taxa = 48000.0;
+		double amp = 0.0;         // ja em contagem cheia do formato
+		int canais = 1;
+		bool flutuante = true;
+	};
+
+	int emitCallback(void* out, void* in, unsigned nFrames, double streamTime,
+		RtAudioStreamStatus status, void* userData) {
+		(void)in; (void)streamTime; (void)status;
+		EmitState* st = static_cast<EmitState*>(userData);
+		if (!out || nFrames == 0) return 0;
+
+		double picoAqui = 0.0;
+		if (st->flutuante) {
+			float* p = static_cast<float*>(out);
+			for (unsigned i = 0; i < nFrames; i++) {
+				const long k = st->escrito + (long)i;
+				const double v = st->amp * std::sin(2.0 * EMIT_PI * (double)k * EMIT_HZ / st->taxa);
+				for (int c = 0; c < st->canais; c++) p[i * st->canais + c] = (float)v;
+				const double a = v < 0.0 ? -v : v;
+				if (a > picoAqui) picoAqui = a;
+			}
+		} else {
+			short* p = static_cast<short*>(out);
+			for (unsigned i = 0; i < nFrames; i++) {
+				const long k = st->escrito + (long)i;
+				const double v = st->amp * std::sin(2.0 * EMIT_PI * (double)k * EMIT_HZ / st->taxa);
+				const short s = (short)(v + (v >= 0.0 ? 0.5 : -0.5));
+				for (int c = 0; c < st->canais; c++) p[i * st->canais + c] = s;
+				const double a = v < 0.0 ? -v : v;
+				if (a > picoAqui) picoAqui = a;
+			}
+		}
+		st->escrito += (long)nFrames;
+		st->amostras.store(st->escrito);
+		st->callbacks.fetch_add(1);
+		if (picoAqui > st->pico) st->pico = picoAqui;
+		return 0;
+	}
+
+	// Abre a primeira rota que abrir, pela mesma ordem da varredura - ASIO
+	// primeiro porque e a unica que nao depende do servico morto - e emite.
+	bool emitRota(RtAudio::Api api, const char* token, double segundos,
+		double dbfs, EmitState& st, std::string& motivo) {
+		std::string ultimoErro;
+		RtAudio ra(api, [&](RtAudioErrorType t, const std::string& e) {
+			ultimoErro = erroNome(t) + ": " + e;
+		});
+		if (ra.getCurrentApi() != api) {
+			motivo = std::string(token) + ": nao compilado";
+			return false;
+		}
+
+		for (unsigned int id : ra.getDeviceIds()) {
+			RtAudio::DeviceInfo d = ra.getDeviceInfo(id);
+			if (d.outputChannels == 0) continue;
+
+			std::vector<unsigned int> taxas;
+			std::vector<RtAudioFormat> fmts;
+			taxasCandidatas(d, taxas);
+			formatosCandidatos(d, fmts);
+
+			RtAudio::StreamParameters p;
+			p.deviceId = d.ID;
+			p.nChannels = std::min(d.outputChannels, 2u);
+			p.firstChannel = 0;
+
+			for (unsigned int taxa : taxas) {
+				for (RtAudioFormat fmt : fmts) {
+					unsigned int buf = EMIT_BUFFER;
+					RtAudio::StreamOptions opt;
+					opt.flags = 0;
+					opt.numberOfBuffers = 0;
+					st.taxa = (double)taxa;
+					st.canais = (int)p.nChannels;
+					st.flutuante = (fmt == RTAUDIO_FLOAT32);
+					// a amplitude do teste e em relacao ao fundo do formato: um
+					// float32 vai a 1,0 e um int16 a 32767, e -18 dBFS sao os
+					// mesmos 0,12589 dos dois lados so depois desta conta
+					st.amp = std::pow(10.0, dbfs / 20.0) * (st.flutuante ? 1.0 : 32767.0);
+					// cada tentativa de abrir e uma contagem do zero: uma rota que
+					// abriu e nao comecou deixaria atras si callbacks e amostras de
+					// um stream que nunca existiu, e a leitura seguinte mentia
+					st.escrito = 0;
+					st.pico = 0.0;
+					st.callbacks.store(0);
+					st.amostras.store(0);
+
+					const RtAudioErrorType e = ra.openStream(&p, nullptr, fmt, taxa,
+						&buf, &emitCallback, &st, &opt);
+					if (e != RTAUDIO_NO_ERROR) {
+						motivo = std::string(token) + " " + d.name + ": "
+							+ erroNome(e) + " " + ra.getErrorText();
+						continue;
+					}
+					const RtAudioErrorType s = ra.startStream();
+					if (s != RTAUDIO_NO_ERROR && s != RTAUDIO_WARNING) {
+						motivo = std::string(token) + " " + d.name
+							+ ": abriu mas nao comecou - " + erroNome(s);
+						ra.closeStream();
+						continue;
+					}
+
+					apLog(std::string("EMISSAO: ") + token + " | " + d.name + " | "
+						+ std::to_string((long)taxa) + " Hz | " + formatoNome(fmt)
+						+ " | " + std::to_string((int)p.nChannels) + " canais | buffer "
+						+ std::to_string((int)buf) + " quadros");
+					apLog(std::string("EMISSAO: ") + std::to_string((long)(segundos))
+						+ " s de " + std::to_string((long)EMIT_HZ) + " Hz a "
+						+ std::to_string(dbfs).substr(0, 5) + " dBFS = amplitude "
+						+ std::to_string(st.amp).substr(0, 6)
+						+ (st.flutuante ? " (contagem de float32)" : " (contagem de int16)"));
+
+					const auto wall0 = std::chrono::steady_clock::now();
+					std::this_thread::sleep_for(std::chrono::milliseconds((int)(segundos * 1000)));
+					const double parede = std::chrono::duration<double>(
+						std::chrono::steady_clock::now() - wall0).count();
+					const double relogio = ra.getStreamTime();
+					const long amostras = st.amostras.load();
+
+					apLog(std::string("EMISSAO: callbacks ") + std::to_string(st.callbacks.load())
+						+ " em " + std::to_string(parede).substr(0, 4) + " s | relogio do stream "
+						+ std::to_string(relogio).substr(0, 4) + " s | amostras escritas "
+						+ std::to_string(amostras) + " (= " + std::to_string(relogio).substr(0, 4)
+						+ " s x taxa) | pico escrito " + std::to_string(st.pico).substr(0, 6));
+
+					// a conta que nao se pode poupar: se o relogio do stream nao
+					// andou, o motorista chamou-nos mas o driver nao saiu de
+					// lado nenhum, e um "pico escrito" alto nesse caso e um
+					// numero bonito sobre silencio
+					if (relogio < 0.2 * parede)
+						apLog(std::string("EMISSAO: VACUO - o relogio do stream andou ")
+							+ std::to_string(relogio).substr(0, 4) + " s em "
+							+ std::to_string(parede).substr(0, 4)
+							+ " s de parede. O pico escrito e nosso; o que o driver entregou e zero.");
+					else if (amostras < (long)(0.5 * parede * st.taxa))
+						apLog("EMISSAO: VACUO - amostras escritas muito abaixo da parede x taxa");
+
+					ra.stopStream();
+					ra.closeStream();
+					return true;
+				}
+			}
+		}
+		if (motivo.empty()) motivo = std::string(token) + ": nenhum dispositivo com saidas";
+		(void)ultimoErro;
+		return false;
+	}
+
+}   // namespace anonimo
 
 // ==================== porta publica ====================
+
 bool audioProbeAtiva() {
 	char buf[8] = { 0 };
 	size_t got = 0;
@@ -332,4 +501,56 @@ void audioProbeRun(AudioProbeReport& rep) {
 				return std::to_string(t);
 			}());
 	}
+}
+
+bool audioEmitAtiva() {
+	char buf[8] = { 0 };
+	size_t got = 0;
+	return getenv_s(&got, buf, sizeof(buf), "CV0_AUDIOEMIT") == 0 && got > 0;
+}
+
+void audioEmitRun() {
+	// sem a variavel este ponto nao existe: nenhum transporte e aberto e
+	// nenhuma linha e escrita
+	const std::string pedido = envStr("CV0_AUDIOEMIT");
+	if (pedido.empty()) return;
+
+	// o valor e a duracao. um texto que nao e numero nao e um pedido de 0 s, e
+	// deixar o teste mudo seria uma mentira sobre a variavel: cai no default
+	// de 5 s e diz isso na linha de abertura
+	double segundos = std::atof(pedido.c_str());
+	const bool naoEhNumero = (segundos == 0.0);
+	if (naoEhNumero) segundos = 5.0;
+	if (segundos < EMIT_MIN_S) segundos = EMIT_MIN_S;
+	if (segundos > EMIT_MAX_S) segundos = EMIT_MAX_S;
+
+	apLog("=== teste de emissao (CV0_AUDIOEMIT=" + pedido + ") | "
+		+ std::to_string((long)segundos) + " s de " + std::to_string((long)EMIT_HZ)
+		+ " Hz a " + std::to_string(EMIT_DBFS).substr(0, 5) + " dBFS"
+		+ (naoEhNumero ? " | a variavel nao e um numero: duracao default" : ""));
+
+	// ASIO primeiro, pela mesma razao da varredura: e a unica rota que nao
+	// depende do servico que quebra. A primeira que abrir emite e para aqui.
+	const int ordem[] = { (int)RtAudio::WINDOWS_ASIO, (int)RtAudio::WINDOWS_WASAPI,
+		(int)RtAudio::WINDOWS_DS };
+	const char* tokens[] = { "asio", "wasapi", "ds" };
+
+	EmitState st;
+	bool abriuAlguma = false;
+	for (int i = 0; i < 3 && !abriuAlguma; ++i) {
+		std::string motivo;
+		abriuAlguma = emitRota((RtAudio::Api)ordem[i], tokens[i], segundos, EMIT_DBFS, st, motivo);
+		if (!abriuAlguma) apLog("EMISSAO: " + motivo);
+	}
+
+	// a frase que fecha o teste e a unica que nao pode faltar: tudo o que foi
+	// impresso acima e o motorista a escrever num buffer. O veredito mora
+	// fora deste processo e na boca de quem esta na sala.
+	if (abriuAlguma)
+		apLog("EMISSAO: fim da medicao. O que foi escrito esta medido; o que saiu "
+			"da caixa nao pode ser medido por este codigo. So ha duas respostas "
+			"possiveis e nenhuma delas e um numero: ouvi ou nao ouvi.");
+	else
+		apLog("EMISSAO: VACUO - nenhuma rota abriu e nenhuma amostra foi escrita. "
+			"Sem emissao a pergunta continua a ser a da varredura, nao a do som.");
 }
