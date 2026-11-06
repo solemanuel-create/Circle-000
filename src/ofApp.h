@@ -4,61 +4,16 @@
 #include "ofxOpenCv.h"
 #include "kinect1473.h"
 
-// Os inteiros abaixo sao o contrato com o uniform uEffect do blobfx.frag.
-enum CvEffect {
-	CV_EFFECT_INVERT = 0,
-	CV_EFFECT_BW_THRESHOLD = 1,
-	CV_EFFECT_BW_DITHER = 2,
-	CV_EFFECT_COUNT = 3
-};
+#include "cvModel.h"
+#include "cvSpace.h"
+#include "blobModel.h"
+#include "maskPipeline.h"
+#include "paramTable.h"
+#include "sourceTable.h"
+#include "effectTable.h"
 
-// F1..F4 na ordem que ele declarou: integrada, Kinect, EOS, NDI.
-// Os tres primeiros sao filtros DirectShow abertos pelo cv::VideoCapture; o
-// Kinect 1473 nao e, ele fala pelo NuiApi do Kinect SDK v1.8 (kinect1473.cpp).
-enum CvSource {
-	SRC_WEBCAM = 0,
-	SRC_KINECT = 1,
-	SRC_EOS = 2,
-	SRC_NDI = 3,
-	SRC_COUNT = 4
-};
-
-static const int CV_MAX_BLOBS = 32;
-
-struct CvParams {
-	CvEffect effect = CV_EFFECT_INVERT;
-	float threshold = 0.5f;
-	float ditherBias = 0.0f;
-	float mouseRadius = 600.0f;
-	float scaleNear = 3.0f;
-	float scaleFar = 0.4f;
-	float speed = 60.0f;
-	bool showOverlay = true;
-	bool flipY = false;
-
-	// pacote 3 - fonte e tracker
-	CvSource source = SRC_WEBCAM;
-	bool showMask = false;
-	int deviceId = -1;
-	int camW = 640;
-	int camH = 480;
-	int camFps = 30;
-	float motionThresh = 18.0f;
-	float bgAlpha = 0.05f;
-	float minAreaPct = 0.004f;
-	// a maquina nao precisa dos 720p inteiros: rastreiar menor e o que
-	// devolve os 30 fps da camera em vez dos 15 do processamento
-	int trackW = 640;
-
-	// DSHOW e o backend do dialog de ISO, MSMF e o que entrega os 30 fps nesta
-	// camera (medido: DSHOW 15,0 fps, MSMF 31,2 fps no mesmo modo 1280x720).
-	bool dshowFirst = false;
-
-	// o palco do Kinect em milimetros: corpo e o que estiver entre os dois.
-	// A porta de distancia dispensa o modelo de fundo e nao depende de luz.
-	int kinectNearMM = 1000;
-	int kinectFarMM = 4500;
-};
+#include <atomic>
+#include <thread>
 
 class ofApp : public ofBaseApp {
 
@@ -66,6 +21,8 @@ public:
 	void setup();
 	void update();
 	void draw();
+	// join da thread de ligacao antes de o ofApp deixar de existir
+	void exit();
 
 	void keyPressed(int key);
 	void mouseMoved(int x, int y);
@@ -79,34 +36,103 @@ public:
 	ofShader fx;
 	CvParams params;
 
-	ofRectangle fitRect;
+	// Os tres espacos por onde um pixel anda (fonte / maquina / janela) e a
+	// maquina de silhueta em si. O ofApp nao segura mais nenhum buffer de
+	// rastreio: ele entrega o frame e le os contornos que voltam.
+	CvSpace space;
+	MaskPipeline mask;
+
+	// P2: a faixa, o passo e a tecla de cada parametro vivem aqui e em mais
+	// nenhum sitio. O keyPressed nomeia a linha por id; o HUD desenha a linha
+	// inteira. Os dois leem a mesma tabela, por isso nao ha como discordarem.
+	ParamTable table;
+
+	// P3: o mesmo principio para as duas escolhas que nao sao numeros. O que uma
+	// fonte e (nome, tecla, token de ambiente, o que se procura na lista do
+	// backend, se o c e o v tem o que fazer aqui) mora numa linha; o que um
+	// efeito e (nome, tecla, o inteiro do uEffect) mora noutra. O ofApp passou a
+	// perguntar às tabelas em vez de comparar ids soltos.
+	SourceTable sources;
+	EffectTable effects;
+
+	// o resultado da leitura do frag contra a tabela de efeitos: 0 bate tudo,
+	// 1 o frag nao foi lido (nao ha como saber), 2 diverge. Sao tres estados
+	// porque "nao verificado" e uma resposta diferente de "verificado e errado",
+	// e em cena as duas cores significam acoes diferentes.
+	int fxContract = 0;
+	string fxContractNote;
+
 	ofVec2f mouse;
 
 	vector<ofRectangle> rects;
-	vector<ofRectangle> scaled;
 	vector<ofVec2f> dir;
-	vector<float> blobData;
+
+	// P4: o que vai para o uBlobs e o que o overlay desenha vivem no mesmo slot
+	// de um registo de arrays fixos, com um id que sobrevive de um frame para o
+	// outro. Nao ha mais nenhum vector no caminho do frame: nem o float[128] com
+	// indexacao magica, nem o idx(n) que a ordenacao por area construia a cada
+	// actualizacao, nem o scaled que crescia frame a frame.
+	BlobRegistry blobs;
+	vector<int> blobOrder;
+
+	// o #define CV_MAX_BLOBS do frag contra o CV_MAX_BLOBS do C++, lido uma vez
+	// no setup com o mesmo tres estados do contrato de efeitos
+	int blobContract = 0;
+	string blobContractNote;
+
+	// O HUD desenha uma linha de cada vez e o texto nasce em buffers fixos: as
+	// cadeias de operator+ eram tres alocacoes por linha, por frame. O que ainda
+	// sobra e a copia que o propio ofDrawBitmapString faz la dentro, e essa nao
+	// e nossa.
+	char hudTxt_[256];
+	string hudLinha_;
+	string hudPeda_;
 
 	bool shaderOk = false;
 	int activeBlobs = 0;
 
-	void updateFit();
 	void drawOverlay();
+
+	// As pecas do HUD sem alocacao. hudFmt escreve na hudTxt_ e devolve o
+	// comprimento do que coube (o _TRUNCATE e o que impede o abort do sprintf_s
+	// num buffer curto, e a sonda de igualdade e o que prova que aqui nada e
+	// cortado). hudDraw e hudWrap desenham por prefixo mais recorte: os dois
+	// strings de destino tem capacidade reservada no setup, por isso nao ha
+	// copia de linha nem substr de segmento. hudWrap e a coluna de 66 caracteres
+	// e quebra no ultimo espaco, nao no meio de um numero.
+	size_t hudFmt(const char* fmt, ...);
+	void hudDraw(int& y, const char* prefix, const char* s, size_t n);
+	void hudWrap(int& y, const char* prefix, const char* s, size_t n);
+
+	// Sonda do sistema de log do openFrameworks, atras de variavel de ambiente.
+	// So existe para responder uma pergunta que hoje esta no escuro: o silencio
+	// imposto em main.cpp e anterior ao core restaurado, e enquanto ele vale os
+	// addons nao logam nada - e o log dos addons e exatamente o que diagnosticaria
+	// uma dependencia nova. Sem a variavel, a funcao nao faz absolutamente nada.
+	void logProbe();
 
 	// ----- camera -----
 	// O videoInput do openFrameworks morre ao abrir o dispositivo nesta
 	// instalacao (SIGSEGV em listDevices e em setup). O cv::VideoCapture le
-	// frames reais, entao a entrada passa por ele e o nome dos filtros vem do
-	// ICreateDevEnum.
+	// frames reais, entao a entrada passa por ele e os nomes vem das duas
+	// enumeracoes proprias que os backends usam por baixo (cvDevices.cpp).
 	cv::VideoCapture cap;
 	cv::Mat mFrame, mRgb;
 	ofTexture texLive;
+	// as duas listas vivem lado a lado porque sao duas enumeracoes diferentes do
+	// mesmo hardware: DSHOW e MSMF numeram cada uma do seu jeito e um indice
+	// so vale dentro da lista do backend com que ele e usado
 	vector<string> camNames;
+	vector<string> camNamesMf;
 	bool capOk = false;
 	bool texOk = false;
 	bool frameNew = false;
 	int capIndex = -1;
 	int capApi = 0;
+	// qual fonte esta de pe de verdade, nao qual foi pedida: e o que diz se a
+	// proxima tecla de fonte tem algo a mudar ou se so custaria um buraco no
+	// palco. -1 enquanto nada abriu.
+	int srcAtivo = -1;
 	string capName;
 	string capNote;
 	// aviso de uma tecla: vive ate a proxima, para o 'p' poder dizer que o
@@ -119,28 +145,43 @@ public:
 	Kinect1473 kinect;
 	bool kinectOk = false;
 	cv::Mat kColor, kDepth;
-	cv::Mat mDepthBin, mBinColor;
-	int kinectInside = 0;
 
-	ofxCvGrayscaleImage cvBin;
-	ofxCvContourFinder finder;
+	// O NuiInitialize frio leva 20-25 s porque e o Kinect Service que acorda,
+	// nao o nosso codigo. Na main thread isso e uma janela preta e sem tecla,
+	// em cena indistinguivel de um crash. Entao a ligacao vai para uma thread e
+	// o HUD mostra o tempo ate ela voltar.
+	std::thread kinectThread;
+	std::atomic<bool> kinectWaking{ false };
+	std::atomic<bool> kinectOpenDone{ false };
+	bool kinectOpenResult = false;
+	string kinectOpenNote;
+	double kinectWakeStart = 0.0;
+	// quantas ligacoes o processo ja pagou: e a unica prova em log de que a
+	// tecla repetida nao derrubou um sensor saudavel para ligar o mesmo de novo
+	int kinectOpens = 0;
 
-	// mGray e o cinza do frame inteiro; mCur em diante vivem na resolucao de
-	// rastreio (params.trackW), por isso as coordenadas dos blobs precisam das
-	// dimensoes da maquina para voltar ao espaco da fonte.
-	cv::Mat mGray, mCur, mNorm, mBg, mDiff, mBin, mStatic, mKernel, mBgTmp;
-	int maskW = 0;
-	int maskH = 0;
+	// ----- pacote 4: barramento de sinais, envelope, mapa de ganhos -----
+	// Os alvos crus vivem dentro de sig; os numeros abaixo sao o resultado do
+	// envelope vezes o ganho, e sao a unica coisa que o render le. O som le
+	// sig, nao isto aqui, para que os dois tenham a mesma hora sem um depender
+	// do outro.
+	CvSignals sig;
+	float rExposure = 0.0f;
+	float rGrow = 0.0f;
+	float rThresh = 0.0f;
+	float rDither = 0.0f;
+	float rSpeed = 0.0f;
+	ofVec2f prevCent = ofVec2f(0.0f, 0.0f);
+	bool haveCent = false;
+	// o custo do barramento tem que aparecer no HUD: se ele passar do
+	// orcamento do rastreio, a reacao passou a custar fps
+	double sigMs = 0.0;
 
-	bool bgReady = false;
 	bool camStalled = false;
-	bool liveSource = false;
+	// As duas origens do frame, calculadas uma vez no update() e lidas por nome
+	// em vez de cada leitor re-inventar o que `liveSource` queria dizer.
+	CvFrameOrigin origin;
 	double lastNewFrame = 0.0;
-	float curMean = 0.0f;
-	float bgMean = 0.0f;
-	float gain = 1.0f;
-	int srcW = 0;
-	int srcH = 0;
 
 	// Onde vai o orcamento do frame decide o que corrigir: se a espera pela
 	// camera manda, e o modo do sensor (resolucao/exposicao); se o rastreio
@@ -149,17 +190,27 @@ public:
 	double trackMs = 0.0;
 	double cycleMs = 0.0;
 
-	int findDevice(const string& needle);
+	// o indice sai sempre da lista do backend que vai ser aberto: a busca e
+	// feita em camNames ou camNamesMf conforme o caso, nunca na outra
+	int pickIndex(const vector<string>& list, const string& needle);
 	void chooseSourceFromEnv();
-	bool openSource();
+	// forcar e o "sei que vou pagar a ligacao de novo": usado por quem muda
+	// algo no pedido (backend, modo do sensor). Sem ele, ligar o que ja esta
+	// ligado e um nao-operao com aviso no HUD.
+	bool openSource(bool forcar = false);
 	void closeSource();
-	bool openIndex(int idx);
-	void trackFrame();
-	void trackDepth();
-	void runContours();
+	bool openIndex(int idx, int api);
+	void updateSignals(float dt);
+	void applyGains();
 	void uploadTexture();
-	void seedBackground();
 	void pushCameraBlobs();
 	void pushSyntheticBlobs(float dt);
-	ofBaseDraws* activeSource();
+	// As duas perguntas tem duas funcoes. `drawSource()` e o que vai para o fbo
+	// e, porque o espaco do shader e o espaco do que se desenha, e ela tambem
+	// que da o tamanho ao CvSpace. `stillSource()` e a foto: o fallback dos
+	// pixels e o espaco onde o baralho de retangulos e semeado - amarrar os
+	// dois a esta unica funcao e o que impede o baralho de nascer num espaco
+	// que a tela nao esta mostrando.
+	ofBaseDraws* drawSource();
+	ofBaseDraws* stillSource();
 };

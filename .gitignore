@@ -361,3 +361,7 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Registro P6 (2026-11-06): intermediarios de build do nome antigo, guardados
+# no disco em quarantine-nomes-2026-11-06/ mas fora do repo. Os .exe/.lib/.pdb ja
+# caem na regra [Bb]in/ de cima.
+quarantine-nomes-2026-11-06/obj-*/

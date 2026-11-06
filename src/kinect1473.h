@@ -22,10 +22,10 @@ public:
 	void close();
 	bool ready() const { return ready_; }
 
-	// Bits: 1 = cor nova, 2 = profundidade nova. O 1473 entrega cor a 15 fps
-	// e profundidade a 30, entao os dois streams tem ritmos diferentes e o
-	// chamador precisa saber qual deles encheu o que. O mapa de paralaxe e
-	// construido aqui, uma vez, no primeiro frame de profundidade.
+	// Bits: 1 = cor nova, 2 = profundidade nova. Os dois streams tem ritmos
+	// proprios (medidos em statusNote, nao assumidos) e o chamador precisa saber
+	// qual deles encheu o que. O mapa de paralaxe e construido aqui, uma vez, no
+	// primeiro frame de profundidade.
 	int grab(cv::Mat& color, cv::Mat& depthMm);
 
 	// Profundidade -> cor: para cada pixel de profundidade, o indice do pixel

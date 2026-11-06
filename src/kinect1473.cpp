@@ -50,6 +50,8 @@ struct Kinect1473::Impl {
 	long nullPBits = 0;
 	int colorPitch = 0;
 	int depthPitch = 0;
+	// carimbo da abertura: e dele que sai a taxa medida dos dois streams
+	ULONGLONG openTick = 0;
 };
 
 // =========================
@@ -57,6 +59,11 @@ Kinect1473::Kinect1473()
 	: ready_(false), mapOk_(false), W_(KINECT_W), H_(KINECT_H) {
 	impl_ = new Impl();
 	ZeroMemory(&impl_->colorViewArea, sizeof(impl_->colorViewArea));
+	// as duas notas sao reescritas em todo grab e em todo buildMap: reservada a
+	// capacidade, a atribuicao troca o conteudo dentro do proprio buffer em vez
+	// de pedir memoria ao allocator a cada frame do sensor
+	statusNote.reserve(224);
+	mapNote.reserve(128);
 }
 
 // =========================
@@ -119,10 +126,14 @@ bool Kinect1473::open(std::string& note) {
 	mapOk_ = false;
 	map_.clear();
 	mapNote.clear();
+	impl_->openTick = GetTickCount64();
 
 	char b[64];
 	sprintf_s(b, sizeof(b), " | %d sensor(es)", sensors);
-	note = "Kinect 1473 | NuiApi SDK v1.8 | cor 640x480@15 + profundidade@30" + std::string(b);
+	// nenhuma taxa aqui: o que se mostra no HUD e a medida dos contadores, nao a
+	// tabela do SDK. Em 640x480 a cor vem na cadencia da profundidade; o "@15"
+	// que esta nota carregava e do 1280x1024.
+	note = "Kinect 1473 | NuiApi SDK v1.8 | cor + profundidade 640x480" + std::string(b);
 	return true;
 }
 
@@ -192,8 +203,8 @@ int Kinect1473::grab(cv::Mat& color, cv::Mat& depthMm) {
 	// quem devolve e NuiImageStreamReleaseFrame. Copiar sempre, guardar nunca.
 	const NUI_IMAGE_FRAME* fr = nullptr;
 
-	// Cor sem espera: o 1473 entrega 15 fps neste stream e quem da o ritmo do
-	// loop e a profundidade. Frame velho e frame repetido, nao erro.
+	// Cor sem espera: quem da o ritmo do loop e a profundidade, com timeout
+	// proprio. Frame velho e frame repetido, nao erro.
 	if (SUCCEEDED(NuiImageStreamGetNextFrame(impl_->hColor, 0, &fr)) && fr != nullptr) {
 		INuiFrameTexture* tex = fr->pFrameTexture;
 		NUI_LOCKED_RECT lr;
@@ -245,10 +256,16 @@ int Kinect1473::grab(cv::Mat& color, cv::Mat& depthMm) {
 	}
 
 	// saude por stream: em cena isso e a diferenca entre "o Kinect nao tem cor"
-	// e "o Kinect esta la e o color stream esta seco"
-	char b[160];
-	sprintf_s(b, sizeof(b), "cor %ld f (pitch %d)  |  profundidade %ld f (pitch %d)  |  buffer vazio %ld",
-		impl_->colorFrames, impl_->colorPitch, impl_->depthFrames, impl_->depthPitch,
+	// e "o Kinect esta la e o color stream esta seco". As duas taxas sao medias
+	// desde a abertura, nao uma tabela: e assim que o "@15" antigo foi pego.
+	const ULONGLONG tick = GetTickCount64();
+	const double ms = (tick > impl_->openTick && impl_->openTick != 0)
+		? (double)(tick - impl_->openTick) : 1000.0;
+	char b[224];
+	sprintf_s(b, sizeof(b),
+		"cor %ld f @%.1f fps (pitch %d)  |  profundidade %ld f @%.1f fps (pitch %d)  |  buffer vazio %ld",
+		impl_->colorFrames, impl_->colorFrames * 1000.0 / ms, impl_->colorPitch,
+		impl_->depthFrames, impl_->depthFrames * 1000.0 / ms, impl_->depthPitch,
 		impl_->nullPBits);
 	statusNote = b;
 
