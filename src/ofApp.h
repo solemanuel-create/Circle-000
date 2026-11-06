@@ -13,6 +13,7 @@
 #include "effectTable.h"
 #include "midiOut.h"
 #include "audioProbe.h"
+#include "audioEngine.h"
 #include "midiProbe.h"
 
 #include <atomic>
@@ -204,6 +205,15 @@ public:
 	// que isso se ve, nao depois.
 	MidiOut midiOut;
 	double midiMs = 0.0;
+
+	// Pacote 5, o som da sala: o mesmo barramento que o render ve e o cabo manda
+	// passa a ser ouvido nesta maquina, pela rota que a sonda abriu e ele ouviu.
+	// Nao e sonda - abre em todo inicio e e mudo se nenhuma rota abrir, dizendo
+	// isso no log e no HUD. O `audioMs` e o custo de PUBLICAR, nao de sintetizar:
+	// a conta acontece na thread do motorista e o que aqui se mede sao os stores
+	// atomicos e a fila, para se saber se o barramento comecou a comer fps.
+	AudioEngine audioEngine;
+	double audioMs = 0.0;
 
 	// o master ja decidido, lido pelo cabo em vez de recontado la dentro: o
 	// render e o MIDI tem que mandar exatamente o mesmo numero no mesmo frame

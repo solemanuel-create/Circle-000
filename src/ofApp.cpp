@@ -128,6 +128,16 @@ void ofApp::setup() {
 	// fica aqui na main e nao numa thread.
 	midiOut.setup();
 
+	// O motor de sintese vem a seguir pelo mesmo motivo do cabo: abre na main,
+	// leva uma fracao de frame a enumerar dispositivos e fala em stderr. Depois
+	// dele a rota de audio desta maquina fica tomada para toda a vida do
+	// processo, e e por isso que uma segunda instancia teria de dizer "nenhuma
+	// rota abriu" e continuar a existir. Nao diz ainda: ela morre a 0xc0000005
+	// dentro da abertura ASIO, o que esta medido em DEPENDENCIAS.md sec 8 com o
+	// remendo proposto e nao autorizado. Sem CV0_AUDIOENG nada aqui acontece
+	// alem de uma leitura de ambiente.
+	audioEngine.setup();
+
 	// Sonda de procedencia do nascimento (CV0_CHURN). Nao e uma medicao nova no
 	// caminho: liga um contador dentro do registo, e sem a variavel nenhum campo
 	// e tocado. Serve a uma pergunta que a contagem de nascimentos nao responde -
@@ -533,6 +543,11 @@ void ofApp::exit() {
 	// a porta MIDI e do processo, e um cabo aberto que nao se fecha e um cabo
 	// que a proxima instancia nao consegue abrir
 	midiOut.close();
+
+	// o mesmo, e mais forte, para a rota de audio: um stream ASIO aberto que
+	// fica vivo depois do fecho da janela deixa a proxima instancia muda, e o
+	// motorista continua a chamar um callback cujo contexto ja foi destruido
+	audioEngine.close();
 }
 
 // =========================
@@ -626,6 +641,16 @@ void ofApp::update() {
 	double m0 = ofGetElapsedTimeMicros();
 	midiOut.send(sig, rMaster, blobs);
 	midiMs = ema(midiMs, (ofGetElapsedTimeMicros() - m0) / 1000.0);
+
+	// O motor depois do cabo pela mesma razao: os dois leem o registo ja
+	// empurrado e o mesmo rMaster, e a idade que dispara o pulso e a mesma
+	// numero, lida do cabo. Publicar nao e sintetizar: esta linha e doze stores
+	// atomicos e a fila dos nascimentos; a conta acontece na thread do
+	// motorista e o custo dela sai no tick de cinco em cinco segundos.
+	double a0 = ofGetElapsedTimeMicros();
+	audioEngine.publish(sig, rMaster, blobs, midiOut.idade());
+	audioEngine.tick();
+	audioMs = ema(audioMs, (ofGetElapsedTimeMicros() - a0) / 1000.0);
 
 	if (churnAtiva) churnDump();
 }
@@ -1196,6 +1221,23 @@ void ofApp::drawOverlay() {
 		hudWrap(y, "", hudTxt_, n);
 	}
 
+	// O motor de sintese tambem nao e sonda: abre em todo inicio, e por isso a
+	// linha tambem. O que ela mostra sao os unicos numeros que so a thread do
+	// motorista sabe - se o callback veio, o pico do ultimo bloco, se o limiter
+	// falou e quantos nascimentos nao couberam na fila. O `pub` e o custo do
+	// outro lado, o da main: doze stores atomicos e a fila. Um motor mudo sem
+	// esta linha e um app que parece estar bem e nao esta.
+	{
+		const size_t n = audioEngine.abriu()
+			? hudFmt("  som: %s%s | pico %.4f | ag %.2f | vozes %d | ceif %ld | perd %ld | %.2f ms | pub %.3f ms",
+				audioEngine.nome().c_str(), audioEngine.activo() ? "" : " MUDO (tecla u)",
+				(double)audioEngine.pico(), (double)audioEngine.autoGain(),
+				audioEngine.vozes(), audioEngine.ceifado(), audioEngine.pingPerdidos(),
+				audioEngine.custoMs(), audioMs)
+			: hudFmt("  som: %s", audioEngine.estado().c_str());
+		hudWrap(y, "", hudTxt_, n);
+	}
+
 	// A sonda de churn obedece a CV0_CHURN: sem a variavel a linha nao existe e
 	// a coluna fica o que era. Vai depois do cabo porque e do cabo que ela fala -
 	// um nascimento e exatamente o que um pulso de nota e.
@@ -1226,6 +1268,8 @@ void ofApp::drawOverlay() {
 	ofDrawBitmapString("  p dialog ISO (so DSHOW)   s grava png", panelX, cy);
 	cy += 13;
 	ofDrawBitmapString("  o corta o cabo midi (a porta fica aberta)", panelX, cy);
+	cy += 13;
+	ofDrawBitmapString("  u corta o som (a rota fica aberta, pela rampa)", panelX, cy);
 
 	// ---------- avisos: no pe da janela, a largura toda ----------
 	// As strings de aviso sao as mais largas do HUD e nao cabem ao lado de
@@ -1440,6 +1484,17 @@ void ofApp::keyPressed(int key) {
 		keyNote = midiOut.ligado()
 			? "o: saida midi LIGADA"
 			: "o: saida midi DESLIGADA - a porta fica aberta, o cabo nao fala";
+	}
+
+	// O som corta-se pela rampa, nunca pelo ganho: um zero posto a meio de um
+	// periodo e um clique na sala, e num palco um clique ouve-se mais alto do
+	// que a nota que ele cortou. A rota fica aberta e o motorista continua a
+	// vir - e a rampa de 120 ms que faz o silencio.
+	if (key == 'u') {
+		audioEngine.toggle();
+		keyNote = audioEngine.activo()
+			? "u: som LIGADO (rampa de 0,12 s)"
+			: "u: som MUDO (rampa de 0,12 s) - a rota fica aberta";
 	}
 }
 

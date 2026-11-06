@@ -67,7 +67,8 @@ estava expirada.
 
 | o que | vem de | declarado em | exige da maquina |
 |---|---|---|---|
-| openFrameworks 0.12.1 | `libs/openFrameworksCompiled/lib/vs/x64/openframeworksLib.lib` | via `ProjectReference` (`vcxproj:278`) e as `.props` importadas em `vcxproj:59` e `:63` | o rebuild do core (lento) se os fontes dele mudarem |
+| openFrameworks 0.12.1 | `libs/openFrameworksCompiled/lib/vs/x64/openframeworksLib.lib` | via `ProjectReference` (`vcxproj:298`) e as `.props` importadas em `vcxproj:59` e `:63` | o rebuild do core (lento) se os fontes dele mudarem |
+| RtAudio 6.0.1 (o `ofSoundStream` do OF) | `libs/rtAudio/lib/vs/x64/rtaudio.lib` (`rtaudioD.lib` em Debug) + `libs/rtAudio/include/RtAudio.h` | **sem entrada propria no `.vcxproj`**: vem dos caminhos de include e lib das `.props` do OF (`openFrameworksRelease.props:13` e `:18-19`), importadas em `vcxproj:59` | nada alem do core ja compilado. **A versao e a API nova** (`RtAudio::Api`, `RtAudio::StreamOptions`, contagem de dispositivos por `getDeviceCount`/`DeviceInfo`): quem escrever contra a API antiga nao recebe um erro de versao, recebe `C2039` em nomes que simplesmente nao existem. O `RTAUDIO_VERSION` esta chumbado em `RtAudio.h:49-51` |
 | ofxGui | `addons/ofxGui/src/*.cpp` compilados por glob | glob em `vcxproj:257-260`; include em `vcxproj:234` | nada alem do proprio OF |
 | ofxOpenCv (OpenCV 4.11) | glob em `vcxproj:261-264` + libs nomeadas | libs em `vcxproj:240` (Debug) e `:253` (Release); include em `:234` | os `.dll` do OpenCV ao lado do exe ou no PATH |
 | Kinect SDK v1.8 (NuiApi) | `Kinect10.lib` (import lib do `Kinect10.dll` do System32) | libs em `vcxproj:240` e `:253`; include `$(KINECTSDK10_DIR)inc` em `:234` | **SDK v1.8 instalado** e a variavel de ambiente de maquina `KINECTSDK10_DIR` |
@@ -139,13 +140,17 @@ Nao ha ProjectGenerator aqui, entao `addons.make` (que lista `ofxGui` e
 ## 6. Como adicionar um arquivo proprio em `src/`
 
 Tambem a mao, em tres lugares: `<ClCompile Include="src\arquivo.cpp" />` no grupo
-de `:267-275`, `<ClInclude .../>` no grupo de `:278-287` e, para o VS nao mostrar
+de `:267-279`, `<ClInclude .../>` no grupo de `:282-295` e, para o VS nao mostrar
 tudo solto, o mesmo arquivo em `ctrlv0.vcxproj.filters`. Os tres grupos
-estao completos desde o P4: nove `.cpp` (blobModel, cvDevices, effectTable,
-kinect1473, main, maskPipeline, ofApp, paramTable, sourceTable) e dez headers
-(blobModel, cvDevices, cvModel, cvSpace, effectTable, kinect1473, maskPipeline,
-ofApp, paramTable, sourceTable). A queixa antiga - "o filters so lista ofApp.cpp,
-main.cpp e ofApp.h" - nao vale mais. O que vale e o risco: um arquivo novo no
+estao completos desde o P5: treze `.cpp` (audioEngine, audioProbe, blobModel,
+cvDevices, effectTable, kinect1473, main, maskPipeline, midiOut, midiProbe,
+ofApp, paramTable, sourceTable) e catorze headers
+(audioEngine, audioProbe, blobModel, cvDevices, cvModel, cvSpace, effectTable,
+kinect1473, maskPipeline, midiOut, midiProbe, ofApp, paramTable, sourceTable).
+O `filters` nao e redundante: `audioEngine.h` ficou de fora dele na primeira
+versao do modulo, e o `.vcxproj` compilou e linkou igual — o unico sintoma foi o
+VS mostrar o header fora do grupo `src`. A queixa antiga - "o filters so lista
+ofApp.cpp, main.cpp e ofApp.h" - nao vale mais. O que vale e o risco: um arquivo novo no
 `src/` sem as tres entradas nao aparece no VS e, se for `.cpp`, nao e compilado,
 o que da `LNK2019` em vez de um erro de fonte.
 
@@ -201,6 +206,10 @@ Outras variaveis de runtime, todas com a mesma regra de inercia:
 | `CV0_MIDIAGE` | **agente, nao sonda**: idade em frames a que um corpo da a nota, cortado a `0..60`; `0` repoe exatamente o gatilho antigo e e por isso que existe, para o A/B ter um lado velho. Padrao compilado `3` | `src/midiOut.cpp` (`setup`), `CV_MIDI_PULSO_IDADE` |
 | `CV0_AUDIOEMIT` | **teste, nao sonda de transporte**: o valor e a duracao em segundos (cortada a `1..30`; texto que nao e numero cai em 5 e diz isso na linha de abertura). Poe na rota que abrir um sinus de 440 Hz a -18 dBFS, constantes chumbadas no fonte | `src/audioProbe.cpp` (`audioEmitRun`), chamado em `ofApp::setup()` |
 | `CV0_AUDIOEMIT_PANEL` | **segunda variavel do mesmo teste, nao um modo**: qualquer valor excepto `0`/`off` pede o painel do proprio ASIO4ALL, e so na rota ASIO. Sem ela o comportamento e o que foi medido antes | `src/audioProbe.cpp` (`audioEmitRun` → `emitRota`) |
+| `CV0_AUDIOENG` | **agente, nao sonda**: `off` ou `0` desliga o motor de sintetese por inteiro — nenhuma rota aberta, nenhuma amostra escrita, e o HUD diz `som: desligada por CV0_AUDIOENG` em vez de mentir com um `pico 0.0000`. Sem a variavel o motor abre com o exe, exactamente como o `midiOut` | `src/audioEngine.cpp` (`AudioEngine::setup`), chamado em `ofApp.cpp:137` |
+| `CV0_AUDIOENG_NIVEL` | teto da sala em **dBFS**, cortado a `-40..-6`; fora dessa faixa ou texto que nao e numero, fica o teto de palco (`-18`) e a linha de abertura diz qual ficou e porquê. O valor e a unica entrada do limiter, nao um ganho master | `src/audioEngine.cpp` (`setup`, antes da rota) |
+| `CV0_AUDIOENG_TEST` | **prova por fora, nao um modo de palco**: o valor e a duracao em segundos por cena (`1..4`, texto nao numerico cai em 1). Corre a mesma funcao que o motorista usa, sem dispositivo, e imprime a tabela das cenas mais o WAV do conjunto. Roda **antes** de qualquer tentativa de abrir rota, para os numeros sobreviverem a uma rota que derrube o processo | `src/audioEngine.cpp` (`setup` → `testeOffline`) |
+| `CV0_AUDIOENG_WAV` | despejo da saida **viva**: o valor e a duracao em segundos (`1..30`, cortado, e default 5). Reserva um buffer de `s x 48000 x 2` float numa unica alocacao no `setup()` — zero alocacao no caminho do motorista — e escreve `cv0_audio_eng_vivo.wav` na pasta do exe (PCM16, o que o motorista entregou, nao o que o motor sonhou) | `src/audioEngine.cpp` (`setup`, `Ctx::dump`) |
 
 O `CV0_BLOBMATCH` e o `CV0_BLOBAREA` nao sao sondas: mudam o comportamento. So
 aparecem em uma tabela porque a medicao das duas alavancas so existe junto com a
@@ -278,6 +287,115 @@ O `ASIOControlPanel` devolve `0` em `0,000 s` — nao bloqueia — e a medicao c
 painel aberto deu `743 callbacks em 8.00 s | relogio 7.92 s | 380416 amostras |
 pico 0.1258`, ou seja, a janela do driver nao rouba tempo ao transporte.
 
+### O motor de sintetese (`CV0_AUDIOENG*`)
+
+O motor le o `CvSignals` (a mesma fonte do `midiOut`) e escreve no buffer do
+motorista. Nada mais. As quatro decisoes que estao no `audioEngine.h` e que nao
+se veem do HUD:
+
+| sinal | o que faz no som | por que esse numero |
+|---|---|---|
+| `coerencia` | escolha do colchao: quinta justa (ratio `1.5`) quando a sala esta amarrada, tritono (`sqrt(2)`) quando esta espalhada | **escolha, nao medida** |
+| `zone[i]` | nota `57 + GRAUS[col] + 12*(ROWS-1-row)`; linha 0 = topo da imagem = oitava de cima | zona 0 = nota 69 = A4 = 440 Hz, a referencia que se pode ouvir |
+| `densidade` | passador-baixo `fc = 180 * 33^densidade` | escolha |
+| `velocidade` | tremolo do ar, `1.5 + 11*velocidade` Hz | escolha |
+| idade do corpo | pulso: nota curta quando um id completa `CV_MIDI_PULSO_IDADE` frames | **medida** — e o mesmo N da curva de sobrevivencia |
+| teto | `-18 dBFS` e **o clip point**, nao o full-scale | **medido** como o pico que ele ouvia sem distorcao |
+
+Duas regras de conta que este passo estabeleceu e que valem para qualquer
+medicao de audio da arvore, porque as duas primeiras analises por fora mentiram:
+
+- **Delta por canal e a frames vizinhos.** O metrico `salto` de `testeOffline`
+  comparava o canal esquerdo contra o direito do mesmo instante, o que e uma
+  conta de largura esterica vestida de deteccao de clique: o mesmo salto deu
+  `0,03576` por dentro e `0,00276` por fora. Corrigido para `anterior[2]`.
+- **O bloco de asentamento nao e a cena.** O passador-baixo tem memoria; os
+  primeiros `512` quadros de cada cena pertencem ao som da anterior. As
+  colunas `pico`/`rms`/`fora do teto` so contam depois dele (`b > 0` em C++,
+  `ASS = 512` no script de analise por fora, para as duas linguagens lerem a
+  mesma janela).
+
+A tabela abaixo e a leitura final, com o exe de um OutDir alternativo e
+`CV0_AUDIOENG_TEST=1` (1 s por cena, 48 kHz, 2 canais):
+
+```
+sala vazia      pico 0.0000 (-99.0) | rms 0.0000 | fora do teto 0 | salto 0.00000
+colchao quinta  pico 0.0557 (-25.1) | rms 0.0289 | salto 0.00092
+colchao tritono pico 0.0564 (-25.0) | rms 0.0290 | salto 0.00094
+zona 0 so       pico 0.0095 (-40.5) | rms 0.0043 | salto 0.00060
+as seis zonas   pico 0.0906 (-20.9) | rms 0.0348 | salto 0.00335
+densidade 0     pico 0.0861 (-21.3) | rms 0.0328 | salto 0.00309
+densidade 1     pico 0.1259 (-18.0) | rms 0.0445 | fora do teto 48 | salto 0.01217
+so ar           pico 0.0012 (-58.3) | rms 0.0002 | crest ~6 (ruido, como declarado)
+pulsos          pico 0.0142 (-37.0) | rms 0.0038 | salto 0.00091
+rampa de mute   pico 0.0900 (-20.9) | salto 0.00312
+  rampa | maior salto da 2a metade 0.00222 em t=0.5120 s (corte em 0.5000)
+        | na fronteira de bloco 0.00180 | cauda depois de 0.641 s 0.00000 | ga no fim 0.9998
+master 2        pico 0.1259 (-18.0) | rms 0.0483 | fora do teto 525 | salto 0.02743
+gravado: 571392 quadros | pico do ficheiro 0.1258 | ceifados na copia 0
+```
+
+As tres colunas da rampa existem porque a rampa tem tres doencas diferentes e o
+`salto` sozinho nao as separa: o `quando` acusa o corte, a `fronteira de bloco`
+acusa o degrau do limiter e a `cauda` acusa o motor que nao se cala. Aqui as tres
+estao limpas, e a segunda metade do mute faz saltos **menores** do que os do
+mesmo som a tocar sem mute — que e o que tem de ser para o `u` nao se ouvir.
+
+A analise por fora (`cv0_audioeng_wav.py`, no Temp) concena cena com esta tabela e
+acrescenta o que os numeros sozinhos nao dizem: o espectro prova o colchao
+(110 + 165 com 155,56 **ausente**; 110 + 155,56 com 165 **ausente**), prova a
+zona 0 em 440, prova as seis zonas vivas, e conta **zero amostras acima do teto
+em 1 142 784**. O ficheiro tem `2*canais` bytes por quadro — ler como se fossem
+`2` divide cada cena ao meio e duplica-a.
+
+No `bin` de palco, sem nenhuma variavel, a saida do motor e:
+
+```
+som: ASIO4ALL v2 | pico 0.0104 | ag 1.00 | vozes 8 | ceif 0 | perd 0 | 0.15 ms | pub 0.001 ms
+```
+
+com `31,3 fps / ciclo 22,2 ms`, `466-473 callbacks em 5 s`, `underflow 0` e custo
+por callback `0,11-0,17 ms` (orcamento: 10,7 ms por bloco). `u` muda para
+`som: ASIO4ALL v2 MUDO (tecla u) | pico 0.0000`, e o motorista mede `pico 0.0000
+(silencio dBFS)` — a rota fica aberta, o que se cala e o motor. O despejo de 8 s
+da sala real deu `pico L 0.02917 | pico R 0.03116 | rms mono 0.00456`, com conteudo
+em 261,63 / 523,25 / 110 Hz e zero acima do teto.
+
+O `pub` e o custo do lado da main (doze stores atomicos e a fila da entrada), e
+ele existe no HUD pela mesma razao do `midiMs`: o que nao e medido em cena e o
+que se descobrira tarde. Medido a 30,6 fps: `0,001 ms`. A linha passou a caber em
+duas voltas da coluna de 66 caracteres, provado por screenshot, nao por conta.
+
+O controle negativo ao vivo tambem foi feito, e ele nao e o `CV0_AUDIOENG=off`:
+e a **sala vazia a rota aberta**. Numa corrida sem ninguem em frente a camera,
+com o barramento vivo (`midi out: enviados 132`, os onze CC a modular), o motor
+deu `pico 0.0000 | vozes 0` e o motorista `callbacks 468 em 5.03 s | relogio
+4.99 s | amostras 239616 | dentro do callback 0.097 ms`. Ou seja: o silencio que
+se ouviu nao foi rota morta nem transporte parado — foi a ausencia de corpo, que
+e exatamente a cena 1 da tabela offline.
+
+**O que o motor ainda nao garante.** Uma segunda instancia do mesmo exe morre a
+`0xc0000005` em `ntdll.dll` dentro do `audioEngine.setup()`, antes de imprimir
+qualquer linha `[audio-eng]` — reproduzido duas vezes. O ASIO4ALL entrega o
+dispositivo a um processo de cada vez, e aqui a recusa do segundo nao vem como
+erro: vem como acesso violado. Isto contradiz a promessa escrita em
+`ofApp.cpp:131-136` ("uma segunda instancia tem de dizer 'nenhuma rota abriu' e
+continuar a existir"). O remendo proposto — mutex nomeado global tomado **antes**
+de tocar na API ASIO; se ja esta tomado, dizer `rota ASIO ja tomada por outra
+instancia`, cair para WASAPI/DS e continuar vivo — **nao esta implementado**:
+ninguem o autorizou. Nota separada, e nao e codigo: duas instancias vivas fazem o
+MSMF devolver `-1072873854` na camera (secao 9).
+
+O preco pago por essa descoberta e pratico: cada morte deixa um re-lancamento do
+WER sem janela a viver, e enquanto eles vivem o `bin\ctrlv0.exe` esta **travado**
+(o teste de `FileStream(..., ReadWrite, None)` devolve "usado por outro
+processo"). Desde 2026-11-06 que os PIDs `30320` e `19688` seguram o artefacto de
+palco, e o que nao e deles: nao abrem o ASIO (uma instancia nova, lancada depois
+deles, abriu a rota e entregou 468 callbacks em 5 s), nao ocupam a camera e nao
+aparecem na lista de janelas. Nada foi fechado por decisao: matar processo alheio
+nao e do agente. Enquanto viverem, o bin de palco nao pode ser reescrito e as
+provas correm na saida alternativa.
+
 Duas armadilhas de ferramenta que este passo pagou, e que valem para qualquer
 medicao futura nesta maquina:
 
@@ -339,6 +457,13 @@ qualquer sonda de igualdade desta arvore:
 - A trava de link e da **pasta de onde o exe foi lancado**, nao do projeto:
   instancia rodando de uma saida alternativa deixa o `bin` livre. Antes de
   fechar qualquer coisa, teste a abertura exclusiva no alvo.
+- Uma **segunda instancia** do `ctrlv0.exe` morre a `0xc0000005` em `ntdll.dll`
+  dentro de `audioEngine.setup()`, sem imprimir nenhuma linha `[audio-eng]`: o
+  ASIO4ALL da o dispositivo a um processo de cada vez e aqui a recusa nao vem como
+  erro, vem como acesso violado. Reproduzido duas vezes em 2026-11-06, **ainda nao
+  corrigido** (o remendo proposto esta na secao 8). Cada morte deixa um re-lançamento
+  do WER sem janela a viver em background. Nao e a camera e nao e o `ofSoundStream`:
+  uma instancia so, lancada depois, abre ASIO e camera normalmente ao lado deles.
 - Fora do projeto, mas no caminho do pacote de audio: `audiosrv.dll`, o servico
   de audio do Windows, quebrou 67 vezes em dois dias com `0xc0000005`, em ciclo
   de poucos minutos (contado no Application Log em 2026-11-06). Som em cena

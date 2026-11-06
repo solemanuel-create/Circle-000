@@ -264,6 +264,7 @@
     <ClInclude Include="$(OF_ROOT)\addons\ofxOpenCv\src\*.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\audioEngine.cpp" />
     <ClCompile Include="src\audioProbe.cpp" />
     <ClCompile Include="src\blobModel.cpp" />
     <ClCompile Include="src\cvDevices.cpp" />
@@ -278,6 +279,7 @@
     <ClCompile Include="src\sourceTable.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\audioEngine.h" />
     <ClInclude Include="src\audioProbe.h" />
     <ClInclude Include="src\blobModel.h" />
     <ClInclude Include="src\cvDevices.h" />

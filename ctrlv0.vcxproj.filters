@@ -7,6 +7,9 @@
     <ClCompile Include="src\main.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="src\audioEngine.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
     <ClCompile Include="src\audioProbe.cpp">
       <Filter>src</Filter>
     </ClCompile>
@@ -45,6 +48,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\ofApp.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\audioEngine.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="src\audioProbe.h">

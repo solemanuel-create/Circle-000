@@ -62,6 +62,7 @@ O painel direito do HUD e gerado a partir da mesma tabela que as teclas usam
 | `a` | novo retangulo |
 | `p` | dialog de ISO/exposicao do driver |
 | `s` | salva `cv0_<frame>.png` |
+| `u` | mudo do som **por rampa de 0,12 s**, nunca por ganho a zero no meio do periodo; a rota ASIO fica aberta e o motorista continua a vir |
 
 Tecla de fonte que nao muda nada nao paga uma ligacao: reabrir o que ja esta
 entregando frame seria ate 25 s de sensor morto no meio de um show. A reserva
@@ -72,7 +73,8 @@ e a fonte parada - com frame parado a mesma tecla vira o reabrir manual.
 Coluna esquerda, so medicao: fps, blobs, fonte atual e contador de ligacoes
 pagas, taxa medida de cor e profundidade, paralaxe dentro/fora/falha,
 `espera camera | rastreio | ciclo` em ms, os seis sinais com o custo do
-barramento, as seis zonas 3x2 e os cinco ganhos de tela ja aplicados
+barramento, as seis zonas 3x2, a linha do som (`transporte | pico | ag | vozes |
+ceif | perd | custo do callback`) e os cinco ganhos de tela ja aplicados
 (`master x ganho x envelope`). Coluna direita: a tabela de parametros e os
 comandos. Avisos descem para o pe da janela.
 
@@ -82,13 +84,18 @@ Provado em runtime neste hardware: render GPU com os tres efeitos, rastreio por
 movimento na integrada (~30 fps, MSMF), Kinect 1473 real pelo NuiApi SDK v1.8
 (cor e profundidade a ~30 fps em 640x480, silhueta por porta de distancia com
 mapa de paralaxe completo), abertura assincrona do sensor, barramento de sinais
-a 0,03 ms e a arvore de organizacao P0-P5 com prova de igualdade numerica frame a frame, e o P6 (o renomear do artefato) provado em runtime.
+a 0,03 ms, saida MIDI de controle pelo cabo `Live TD`, e o motor de sintetese na
+rota ASIO4ALL (`466-473 callbacks em 5 s`, `underflow 0`, `0,11-0,17 ms` por
+callback contra um orcamento de 10,7 ms, pico medido pelo proprio motorista a
+`0,0000` no mudo) - com a tabela offline das doze cenas e o espectro do WAV
+analisados por fora, cena a cena. O P6 (o renomear do artefato) esta provado.
 
-Ainda nao provado: o motor de audio (pacote 5), os cues e os perfis `registro` /
-`performance`, a janela dupla de saida, a rota EOS com o dispositivo presente e
-uma silhueta registrada com um corpo a distancia conhecida. As teclas que mudam
-algo de verdade so podem ser provadas por mao no teclado - injecao sintetica nao
-chega ao GLFW nesta plataforma.
+Ainda nao provado: os cues e os perfis `registro` / `performance`, a janela dupla
+de saida, a rota EOS com o dispositivo presente e uma silhueta registrada com um
+corpo a distancia conhecida. **Uma segunda instancia do exe morre ao abrir o
+ASIO** (reproduzido duas vezes, documentado em `DEPENDENCIAS.md` seccao 8) - o
+palco usa uma. As teclas que mudam algo de verdade so podem ser provadas por mao
+no teclado - injecao sintetica nao chega ao GLFW nesta plataforma.
 
 `DEPENDENCIAS.md` e o registro do que este projeto linka, das configuracoes
 incompletas, das variaveis de ambiente, da receita de build e das armadilhas ja
