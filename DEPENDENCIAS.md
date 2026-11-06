@@ -188,6 +188,48 @@ ambiente e por captura de janela. Sem `CV0_LOGPROBE` a funcao retorna na primeir
 linha e nao escreve nada: medido hoje, a saida de um run sem a variavel e
 byte a byte a mesma estrutura do run anterior, sem nenhuma linha `[probe]`.
 
+Outras variaveis de runtime, todas com a mesma regra de inercia:
+
+| variavel | o que faz | onde |
+|---|---|---|
+| `CV0_AUDIOPROBE` | sonda de transporte de audio, uma vez no `setup()` | `src/audioProbe.cpp` |
+| `CV0_MIDIPROBE` | sonda de laco MIDI objetivo (OUT e IN do mesmo cabo); `CV0_MIDIPROBE_PAR` limita ao cabo | `src/midiProbe.cpp` |
+| `CV0_MIDIOUT` | **agente, nao sonda**: escolhe a saida MIDI por nome; `off` ou `0` desliga o modulo | `src/midiOut.cpp` |
+| `CV0_CHURN` | sonda de procedencia dos nascimentos do registo: de 5 em 5 s separa `vazio` / `longe` / `ocupado` / `forcado`, com os baldes de distancia do candidato mais proximo, e o ledger do gatilho (`vive`/`morre` a 8 frames, `sozinho`/`perto-velho`/`perto-novo`, a `curva` de sobrevivencia a 1/2/3/4/8/16 frames, `desc`) | `src/blobModel.cpp`, `ofApp::churnDump()` |
+| `CV0_BLOBMATCH` | limiar de casamento de ids em distancia normalizada (padrao `0.10`, cortado a `0.02..0.60`); sem a variavel o valor e o de sempre | `src/ofApp.cpp` (`setup`), `BlobRegistry::match_` |
+| `CV0_BLOBAREA` | corte de area minima (`minAreaPct`) para a varredura da fragmentacao; cortado a `0.001..0.05`, que e a faixa da linha do painel, e imprime o valor de palco que substituiu | `src/ofApp.cpp` (`setup`), `CvParams::minAreaPct` |
+| `CV0_MIDIAGE` | **agente, nao sonda**: idade em frames a que um corpo da a nota, cortado a `0..60`; `0` repoe exatamente o gatilho antigo e e por isso que existe, para o A/B ter um lado velho. Padrao compilado `3` | `src/midiOut.cpp` (`setup`), `CV_MIDI_PULSO_IDADE` |
+
+O `CV0_BLOBMATCH` e o `CV0_BLOBAREA` nao sao sondas: mudam o comportamento. So
+aparecem em uma tabela porque a medicao das duas alavancas so existe junto com a
+sonda do churn, que passou a imprimir o limiar vigente no primeiro campo da
+linha — e o `CV0_BLOBAREA` imprime na primeira linha o valor de palco que ele
+substituiu, porque uma varredura que nao diz de onde partiu nao e uma varredura.
+A decisao deliberada de deixar `match_` de fora do `reset()`: uma corrida de tres
+limiares nao pode perder a condicao que esta a medir a meio, quando alguem
+carrega em `r`.
+
+A do churn e o caso em que a medicao nao muda o caminho medido: sem a variavel
+`churnAtivo_` e falso, `push()` so faz um teste de bool a mais, nenhum campo de
+`CvChurnProbe` e escrito e a linha do HUD nao existe. O `CV0_MIDIOUT` esta na
+lista porque obedece a uma variavel mas nao e sonda - abre em todo inicio.
+
+O `CV0_MIDIAGE` e o outro lado dessa distincao: tambem nao e sonda, tambem abre
+com o exe, e a diferenca e que ele mudou o que a saida faz. O numero compilado
+(`3`) veio de uma corrida de 30 s no Kinect com o limiar a `0.15` e o corte de
+palco, lida pela boca do `cv0_midi_listen.exe`, que e outro programa:
+
+| gatilho | notas/s no cabo | custo em latencia |
+|---|---|---|
+| idade `0` (nascimento) | 21,2 | 0 ms, e o churn todo a soar |
+| idade `3` | 5,5 | ~100 ms aos 30,6 fps medidos no mesmo run |
+
+Os 120 ms da peca sao o teto, e a 32,7 ms por frame o degrau quatro ja nao cabia
+nele; a curva imprimiu `1:49% 2:30% 3:21% 4:16% 8:6% 16:2%` sobre 547 nascimentos
+reais, ou seja, o debounce nao esta a suprimir corpos, esta a suprimir fragmentos
+que duravam menos de um terco de segundo. A invariante do ledger fecha em todas
+as janelas (`desc 0`, `morre + saidos + pendentes = nascidos - forcados`).
+
 Duas regras que nasceram de sondas que mentiram sem querer, e valem para
 qualquer sonda de igualdade desta arvore:
 

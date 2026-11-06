@@ -264,17 +264,21 @@
     <ClInclude Include="$(OF_ROOT)\addons\ofxOpenCv\src\*.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\audioProbe.cpp" />
     <ClCompile Include="src\blobModel.cpp" />
     <ClCompile Include="src\cvDevices.cpp" />
     <ClCompile Include="src\effectTable.cpp" />
     <ClCompile Include="src\kinect1473.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\maskPipeline.cpp" />
+    <ClCompile Include="src\midiOut.cpp" />
+    <ClCompile Include="src\midiProbe.cpp" />
     <ClCompile Include="src\ofApp.cpp" />
     <ClCompile Include="src\paramTable.cpp" />
     <ClCompile Include="src\sourceTable.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\audioProbe.h" />
     <ClInclude Include="src\blobModel.h" />
     <ClInclude Include="src\cvDevices.h" />
     <ClInclude Include="src\cvModel.h" />
@@ -282,6 +286,8 @@
     <ClInclude Include="src\effectTable.h" />
     <ClInclude Include="src\kinect1473.h" />
     <ClInclude Include="src\maskPipeline.h" />
+    <ClInclude Include="src\midiOut.h" />
+    <ClInclude Include="src\midiProbe.h" />
     <ClInclude Include="src\ofApp.h" />
     <ClInclude Include="src\paramTable.h" />
     <ClInclude Include="src\sourceTable.h" />

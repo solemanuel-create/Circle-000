@@ -35,6 +35,11 @@ namespace {
 	double ema(double prev, double now) {
 		return prev <= 0.0 ? now : prev * 0.8 + now * 0.2;
 	}
+
+	// o passo da sonda de churn: cinco segundos e o bastante para uma taxa nao
+	// ser um acaso de dois frames e curto o bastante para caber numa entrada e
+	// saida de corpo a vista
+	const double CHURN_PASSO_S = 5.0;
 }
 
 // =========================
@@ -43,7 +48,7 @@ void ofApp::logProbe() {
 	// A premissa deste app mudo e de antes do core restaurado: o ofLog.cpp
 	// corrompido de 14-06 esta em quarentena na raiz do projeto e o
 	// openframeworksLib.lib que este binario linka foi refeito em 05-11, depois da
-	// restauracao. Ninguém re-testou desde então. Cada marcador abaixo sai por
+	// restauracao. Ninguem re-testou desde entao. Cada marcador abaixo sai por
 	// stderr, que nao depende do que esta sendo testado: se o processo morrer
 	// entre dois marcadores, o par que falta diz em qual chamada ele morreu.
 	char buf[8] = { 0 };
@@ -95,6 +100,86 @@ void ofApp::logProbe() {
 void ofApp::setup() {
 
 	logProbe();
+
+	// A sonda de transporte bloqueia a main thread por ate 1,5 s por rota viva
+	// e fala em stderr a cada API, antes da camera ligar: se uma rota de audio
+	// derrubar o processo, a quebra e visivel separada do cold start do
+	// Kinect. Sem CV0_AUDIOPROBE a funcao le a variavel, ve que nao existe e
+	// volta sem fazer nada.
+	audioProbeRun(audioProbe);
+
+	// A sonda de MIDI vem depois da de transporte e antes da camera pelo mesmo
+	// motivo: cada uma bloqueia a main thread por ~1 s por cabo e fala em
+	// stderr no fim do proprio turno. Sem CV0_MIDIPROBE a funcao so le a
+	// variavel e volta.
+	midiProbeRun(midiProbe);
+
+	// A saida de controle nao e sonda: ela abre em todo inicio e a pergunta que
+	// responde e do palco, nao do log. Leva um frame a enumerar e abrir uma porta
+	// pela winmm, o que e nada ao lado do cold start de qualquer camera, por isso
+	// fica aqui na main e nao numa thread.
+	midiOut.setup();
+
+	// Sonda de procedencia do nascimento (CV0_CHURN). Nao e uma medicao nova no
+	// caminho: liga um contador dentro do registo, e sem a variavel nenhum campo
+	// e tocado. Serve a uma pergunta que a contagem de nascimentos nao responde -
+	// se o churn de ~22 notas/s e um contorno a piscar sobre o corte ou um corpo
+	// a mover-se mais que o limiar de casamento - e as duas doencas tem remedios
+	// opostos.
+	{
+		char buf[8] = { 0 };
+		size_t got = 0;
+		if (getenv_s(&got, buf, sizeof(buf), "CV0_CHURN") == 0 && got > 0 && buf[0] != '0') {
+			blobs.setChurnProbe(true);
+			churnAtiva = true;
+			churnProx = CHURN_PASSO_S;
+			cv0Log("churn", "sonda ligada: separa vazio / longe / ocupado / forcado");
+		}
+	}
+
+	// Tabela de limiares (CV0_BLOBMATCH): o numero vai para o registo e a sonda
+	// publica-o em cada linha, porque tres corridas que nao dizem em que
+	// condicao rodaram sao tres anecdotas. Sem a variavel, ou com um valor
+	// fora do razoavel, o registo fica no padrao de sempre e nada muda.
+	{
+		char buf[32] = { 0 };
+		size_t got = 0;
+		if (getenv_s(&got, buf, sizeof(buf), "CV0_BLOBMATCH") == 0 && got > 0) {
+			const float m = (float)atof(buf);
+			if (m >= 0.02f && m <= 0.60f) {
+				blobs.setMatch(m);
+				char b[96];
+				::sprintf_s(b, sizeof(b), "CV0_BLOBMATCH=%.3f aplicado ao casamento de ids (padrao 0.100)", m);
+				cv0Log("blobs", b);
+			} else {
+				cv0Log("blobs", "CV0_BLOBMATCH fora de 0.02..0.60: fica o padrao 0.100");
+			}
+		}
+	}
+
+	// Area minima por ambiente (CV0_BLOBAREA), para a varredura da
+	// fragmentacao: o corte e a unica alavanca que existe hoje contra o
+	// contorno-falso, e mexer nele a mao exigiria uma tecla que a tabela
+	// diz nao ter. O clamp e o da linha da tabela (0.001..0.05) escrito a
+	// palavra, porque uma varredura fora da faixa do painel nao seria
+	// reproduzivel por quem esta no palco. Sem a variavel nada e tocado.
+	{
+		char buf[32] = { 0 };
+		size_t got = 0;
+		if (getenv_s(&got, buf, sizeof(buf), "CV0_BLOBAREA") == 0 && got > 0) {
+			const float a = (float)atof(buf);
+			if (a >= 0.001f && a <= 0.05f) {
+				const float antes = params.minAreaPct;
+				params.minAreaPct = a;
+				char b[128];
+				::sprintf_s(b, sizeof(b),
+					"CV0_BLOBAREA=%.3f aplicado ao corte (palco %.3f)", a, antes);
+				cv0Log("maquina", b);
+			} else {
+				cv0Log("maquina", "CV0_BLOBAREA fora de 0.001..0.050: fica o palco");
+			}
+		}
+	}
 
 	ofSetWindowTitle("Ctrl-v-0 TRACK");
 	ofSetBackgroundColor(0);
@@ -436,6 +521,10 @@ void ofApp::exit() {
 	// OF destroi o ofApp depois de fechar a janela: sem este join a thread de
 	// ligacao poderia acordar dentro de um objeto que ja nao existe
 	closeSource();
+
+	// a porta MIDI e do processo, e um cabo aberto que nao se fecha e um cabo
+	// que a proxima instancia nao consegue abrir
+	midiOut.close();
 }
 
 // =========================
@@ -522,6 +611,120 @@ void ofApp::update() {
 
 	if (origin.tracksSource) pushCameraBlobs();
 	else pushSyntheticBlobs(dt);
+
+	// O cabo depois do registo: um pulso e um corpo com idade zero, e a idade so
+	// existe a partir do momento em que o frame foi empurrado. O valor que sai e
+	// o mesmo rMaster que o render usou neste frame, nao um segundo calculo.
+	double m0 = ofGetElapsedTimeMicros();
+	midiOut.send(sig, rMaster, blobs);
+	midiMs = ema(midiMs, (ofGetElapsedTimeMicros() - m0) / 1000.0);
+
+	if (churnAtiva) churnDump();
+}
+
+// =========================
+void ofApp::churnDump() {
+
+	// A conta sai de cinco em cinco segundos. Cinco porque e o suficiente para
+	// uma taxa nao ser um acaso de dois frames, e curto o bastante para um corpo
+	// que entra e sai ser visto dentro de uma janela. A medicao e a diferenca
+	// para a fotografia anterior, nao o acumulado: o que se quer e o que esta a
+	// acontecer nesta sala agora.
+	const double agora = ofGetElapsedTimef();
+	if (agora < churnProx) return;
+	const double janela = agora - churnUltima;
+	churnUltima = agora;
+	churnProx = agora + CHURN_PASSO_S;
+
+	const CvChurnProbe& c = blobs.churn();
+	const long dNasc = c.nascidos - churnAntes.nascidos;
+	const long dVazio = c.porVazio - churnAntes.porVazio;
+	const long dLonge = c.porLonge - churnAntes.porLonge;
+	const long dOcup = c.porOcupado - churnAntes.porOcupado;
+	const long dForc = c.porForcado - churnAntes.porForcado;
+	const long dFrames = c.frames - churnAntes.frames;
+	const long dSem = c.framesSemContorno - churnAntes.framesSemContorno;
+	const long dLivre = c.longeLivre - churnAntes.longeLivre;
+	const long dTomado = c.longeTomado - churnAntes.longeTomado;
+	const long dVive = c.pulsoVive - churnAntes.pulsoVive;
+	const long dMorre = c.pulsoMorre - churnAntes.pulsoMorre;
+	const long dSozinho = c.pulsoSozinho - churnAntes.pulsoSozinho;
+	const long dPertoE = c.pulsoPertoEstab - churnAntes.pulsoPertoEstab;
+	const long dPertoN = c.pulsoPertoNovo - churnAntes.pulsoPertoNovo;
+	const long dFila = c.pulsoFilaCheia - churnAntes.pulsoFilaCheia;
+	const long dSaidos = c.pulsoSaidos - churnAntes.pulsoSaidos;
+
+	// a unica conta que prova que o ledger do pulso roda: nascimentos menos os
+	// forcados tem de ser exatamente o que ja se resolveu, mais o que esta em
+	// fila, mais o que a fila deitou fora. Se o resolver nunca correr, os vivos
+	// e os mortos ficam em zero e a fila estoura em 64 - a linha acusa-se so.
+	// O unico estado em que sobra um numero e um reseed no meio da janela, e ele
+	// diz que foi isso.
+	//
+	// Com a curva o encerramento mudou de mao: um nascimento so sai da fila por
+	// uma de duas portas, `morre` (o id desapareceu antes do ultimo degrau) ou
+	// `saidos` (percorreu a curva toda). `vive` nao e terminal - e o degrau dos
+	// 8 frames, e quem la chegou e continua vivo ate ao 16 conta-se nas duas
+	// contas, por isso somar vive aqui era contar tres vezes o mesmo corpo.
+	const long desc = (c.nascidos - c.porForcado)
+		- (c.pulsoMorre + c.pulsoSaidos + c.pulsoPendentes + c.pulsoFilaCheia);
+
+	// a media do "longe" e a diferenca das somas sobre a diferenca das contas,
+	// nunca a soma acumulada sobre um numero de frames que ja nao e este
+	const double med = dLonge > 0
+		? (c.somaLonge - churnAntes.somaLonge) / (double)dLonge : 0.0;
+
+	// os degraus da curva sao a pergunta que o N do debounce responde: quantos
+	// nascimentos sao ainda o mesmo id a uma idade de 1, 2, 3, 4, 8 e 16 frames.
+	// Um degrau que cai a pique entre 1 e 2 e um corpo que pisca no corte; um
+	// que se mantem ate ao 16 e um corpo que estava la e o gatilho dos 8
+	// frames so atrasou.
+	//
+	// Os rotulos saem do proprio CURVA_IDADE, nao de uma string escrita a mao:
+	// os baldes do "longe" dao-se ao luxo de rotulos fixos porque la o que
+	// muda e a borda, que tambem esta a mao no fonte. Aqui os numeros sao uma
+	// tabela no .cpp e um rotulo fixo no printf desynchronizava-se dela no
+	// silencio - a linha imprimiria "4:" sobre o degrau dos 3 frames.
+	char curvaSeg[128];
+	curvaSeg[0] = '\0';
+	int off = 0;
+	long dCurva[CvChurnProbe::CURVA_N];
+	for (int k = 0; k < CvChurnProbe::CURVA_N && off < (int)sizeof(curvaSeg) - 24; k++) {
+		dCurva[k] = c.curva[k] - churnAntes.curva[k];
+		char pedaco[32];
+		::sprintf_s(pedaco, sizeof(pedaco), "%s%d:%ld", k == 0 ? "" : " ",
+			CvChurnProbe::CURVA_IDADE[k], dCurva[k]);
+		const size_t len = strlen(pedaco);
+		memcpy(curvaSeg + off, pedaco, len);
+		off += (int)len;
+		curvaSeg[off] = '\0';
+	}
+
+	::sprintf_s(churnNota, sizeof(churnNota),
+		"limiar %.3f | janela %.1f s | nasc %ld (%.1f/s) vazio %ld longe %ld ocupado %ld forcado %ld"
+		" | longe livre %ld tomado %ld"
+		" | frames %ld sem-contorno %ld | longe medio %.3f"
+		" | baldes 15:%ld 25:%ld 50:%ld 100:%ld inf:%ld"
+		" | pulso %ldf x %.2f: vive %ld morre %ld"
+		" | dos vivos: sozinho %ld perto-velho %ld perto-novo %ld"
+		" | curva %s saidos %ld"
+		" | fila %ld pend %ld desc %ld",
+		blobs.match(), janela, dNasc, dNasc / (janela > 0.001 ? janela : 0.001),
+		dVazio, dLonge, dOcup, dForc,
+		dLivre, dTomado,
+		dFrames, dSem, med,
+		c.longe[0] - churnAntes.longe[0], c.longe[1] - churnAntes.longe[1],
+		c.longe[2] - churnAntes.longe[2], c.longe[3] - churnAntes.longe[3],
+		c.longe[4] - churnAntes.longe[4],
+		(long)CvChurnProbe::PULSO_N, CvChurnProbe::PULSO_X,
+		dVive, dMorre,
+		dSozinho, dPertoE, dPertoN,
+		curvaSeg, dSaidos,
+		dFila, c.pulsoPendentes, desc);
+
+	cv0Log("churn", churnNota);
+
+	churnAntes = c;
 }
 
 // =========================
@@ -641,6 +844,7 @@ void ofApp::applyGains() {
 	// Um multiplo para tudo, porque em cena nao se desliga um sinal de cada vez:
 	// o g corta o master e o render volta ao que era antes do pacote 4.
 	const float m = params.reactive ? params.master : 0.0f;
+	rMaster = m;
 
 	rExposure = m * params.gainExposure * sig.energyE.v;
 	rGrow = m * params.gainGrow * (0.6f * sig.densityE.v + 0.4f * sig.speedE.v);
@@ -954,12 +1158,41 @@ void ofApp::drawOverlay() {
 			sig.zoneE[3].v * 100.0f, sig.zoneE[4].v * 100.0f, sig.zoneE[5].v * 100.0f));
 
 		// o resultado do envelope vezes o ganho, nao o ganho: o ganho esta na
-		// tabela à direita, esta linha e o que o render esta vendo agora. Os
+		// tabela a direita, esta linha e o que o render esta vendo agora. Os
 		// rotulos sao curtos porque a linha partilha a coluna com o painel.
 		hudDraw(y, "", hudTxt_, hudFmt(
 			"  tela  exp +%.2f  grow +%.2f  umb +%.2f  dith +%.2f  vel +%.0f",
 			rExposure, rGrow, rThresh, rDither, rSpeed));
 	}
+
+	// A sonda de transporte so existe com CV0_AUDIOPROBE no ambiente. Sem a
+	// variavel esta linha nao nasce, e a coluna inteira fica byte a byte como
+	// era antes do modulo de audio existir.
+	if (audioProbe.ativo)
+		hudWrap(y, "  audio: ", audioProbe.resumo.data(), audioProbe.resumo.size());
+	if (midiProbe.ativo)
+		hudWrap(y, "  midi: ", midiProbe.resumo.data(), midiProbe.resumo.size());
+
+	// A saida de controle nao e sonda: ela existe em todo inicio, e por isso a
+	// linha tambem existe em todo inicio - inclusive quando a porta nao foi
+	// achada, que e justamente o caso em que o operador precisa de saber antes
+	// de subir ao palco, sem abrir uma consola. O custo vai aqui pelo mesmo
+	// motivo do sigMs: o que nao e medido em cena e o que se descobrira tarde.
+	{
+		const size_t n = midiOut.abriu()
+			? hudFmt("  midi out: %s%s | cc %d/%d | pulsos %d | enviados %d recusa %d | %.2f ms",
+				midiOut.nome().c_str(), midiOut.ligado() ? "" : " DESLIGADA (tecla o)",
+				midiOut.ccVivos(), (int)CV_MIDI_CC, midiOut.pulsosVivos(),
+				midiOut.enviados(), midiOut.recusados(), midiMs)
+			: hudFmt("  midi out: %s", midiOut.estado().c_str());
+		hudWrap(y, "", hudTxt_, n);
+	}
+
+	// A sonda de churn obedece a CV0_CHURN: sem a variavel a linha nao existe e
+	// a coluna fica o que era. Vai depois do cabo porque e do cabo que ela fala -
+	// um nascimento e exatamente o que um pulso de nota e.
+	if (churnAtiva)
+		hudWrap(y, "  churn: ", churnNota, strlen(churnNota));
 
 	// ---------- coluna direita: a tabela e os comandos ----------
 	// O painel e desenhado a partir das mesmas linhas que as teclas usam. Ha
@@ -983,6 +1216,8 @@ void ofApp::drawOverlay() {
 	ofDrawBitmapString("  b refaz o fundo   r reseed   a novo rect", panelX, cy);
 	cy += 13;
 	ofDrawBitmapString("  p dialog ISO (so DSHOW)   s grava png", panelX, cy);
+	cy += 13;
+	ofDrawBitmapString("  o corta o cabo midi (a porta fica aberta)", panelX, cy);
 
 	// ---------- avisos: no pe da janela, a largura toda ----------
 	// As strings de aviso sao as mais largas do HUD e nao cabem ao lado de
@@ -1187,6 +1422,16 @@ void ofApp::keyPressed(int key) {
 
 	if (key == 's') {
 		ofSaveScreen("cv0_" + ofToString(ofGetFrameNum()) + ".png");
+	}
+
+	// O cabo desliga-se sem se fechar: a porta continua aberta e os valores que
+	// la do outro lado ja estao ficam onde estao, que e o contrario de mandar
+	// zeros. Cortar o MIDI no meio de uma cena nao pode obrigar a reabrir nada.
+	if (key == 'o') {
+		midiOut.toggle();
+		keyNote = midiOut.ligado()
+			? "o: saida midi LIGADA"
+			: "o: saida midi DESLIGADA - a porta fica aberta, o cabo nao fala";
 	}
 }
 

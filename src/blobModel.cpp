@@ -9,12 +9,39 @@ namespace {
 	// ainda e plausivelmente o mesmo corpo: a andar depressa, a 30 fps, ele anda
 	// muito menos que isto. Acima disso nao e o mesmo corpo deslocado - e outro
 	// que apareceu no sitio dele, e um id falso vale pior que nenhum id.
-	const float CV_BLOB_MATCH = 0.10f;
+	//
+	// Este e o PADRAO, nao o unico valor possivel: a medicao da sonda de churn
+	// mostrou que 94% dos nascimentos "longe" estao abaixo de 0,25, e a tabela
+	// de limiares (CV0_BLOBMATCH) serve para julgar essa frase com tres corridas
+	// em vez de um adjetivo. O caminho sem a variavel e este numero, sempre.
+	const float CV_BLOB_MATCH_PADRAO = 0.10f;
 }
+
+// A borda do gatilho, em largura de quadro: 0,25 e o numero que a varredura de
+// limiares e a de corte deixaram, porque e ai que os baldes passam a dominar o
+// "longe" dos fragmentos. Nao e um limiar de casamento - e a distancia abaixo da
+// qual um corpo novo nao e uma entrada de corpo, e o braco do mesmo.
+const float CvChurnProbe::PULSO_X = 0.25f;
+
+// As idades da curva, em frames. Nao sao um capricho: 8 e o PULSO_N com que a
+// primeira conta foi corrida, 16 e o teto que deixa de ser gatilho de palco, e
+// 1/2/4 sao as unicas que cabem no orcamento de latencia camera->tela da peca.
+const int CvChurnProbe::CURVA_IDADE[CvChurnProbe::CURVA_N] = { 1, 2, 3, 4, 8, 16 };
 
 // =========================
 BlobRegistry::BlobRegistry() {
 	reset();
+
+	// a conta da sonda nasce zerada aqui e nao dentro de reset(): um reseed no
+	// meio de um run apagara a medicao que se esta a fazer, e o que se quer
+	// saber e justamente a taxa ao longo de uma janela de segundos
+	churnAtivo_ = false;
+	std::memset(&churn_, 0, sizeof(churn_));
+
+	// o limiar tambem nasce aqui e nao no reset(), pelo mesmo motivo: uma
+	// corrida de tres limiares nao pode perder a condicao que esta a medir a
+	// meio, quando alguem carrega em r
+	match_ = CV_BLOB_MATCH_PADRAO;
 }
 
 // =========================
@@ -37,6 +64,14 @@ void BlobRegistry::reset() {
 	nextId_ = 1;
 	matched_ = 0;
 	born_ = 0;
+
+	// o ledger do pulso mora AQUI e nao no construtor, ao contrario dos
+	// contadores da sonda: um reseed apaga os ids todos, e um pendente que se
+	// resolvesse depois dele morreria por razao de maquina, nao de corpo. A
+	// janela em que se carrega em r fica assim com menos resolucoes do que
+	// nascimentos, e e isso que o numero `desc` da linha da sonda acusa.
+	pendN_ = 0;
+	nascN_ = 0;
 }
 
 // =========================
@@ -46,6 +81,10 @@ void BlobRegistry::beginFrame() {
 	matched_ = 0;
 	born_ = 0;
 	std::memset(taken_, 0, sizeof(taken_));
+
+	// os recem-nascidos sao por frame: a pergunta "havia OUTRO nascimento deste
+	// frame perto?" so faz sentido dentro do frame em que nasceram
+	if (churnAtivo_) nascN_ = 0;
 }
 
 // =========================
@@ -72,7 +111,7 @@ int BlobRegistry::matchId(float cx, float cy, int forced, int& ageOut) {
 	// se cruzam tem de sair pelos ids de sempre, senao o piscar de um glitch
 	// trocaria de corpo a meio do gesto
 	int best = -1;
-	float bestD = CV_BLOB_MATCH * CV_BLOB_MATCH;
+	float bestD = match_ * match_;
 	for (int j = 0; j < pn_; j++) {
 		if (taken_[j]) continue;
 		const float dx = cx - pcx_[j];
@@ -94,6 +133,155 @@ int BlobRegistry::matchId(float cx, float cy, int forced, int& ageOut) {
 }
 
 // =========================
+void BlobRegistry::churnRegista(float cx, float cy, int id, bool forcado) {
+
+	// nada aqui escreve em slot, id ou idade: e so leitura dos centros do frame
+	// anterior, feita uma vez por nascimento, com o limiar deixado de parte de
+	// proposito - a pergunta e "quao longe estava o mais proximo", nao "bateu"
+	churn_.nascidos++;
+
+	if (forcado) {
+		// na rota sintetica o indice do rect e a identidade: um nascimento aqui
+		// nao e um corpo que entrou, e um rect do baralho que voltou a nascer
+		churn_.porForcado++;
+		return;
+	}
+
+	// as duas vizinhancas do instante do nascimento, vistas antes de qualquer
+	// resolucao: um corpo que ja estava na maquina no frame anterior, e um
+	// segundo braco que nasceu neste mesmo frame. As duas sao o mesmo corpo
+	// partido, mas uma regra que so olhasse para os velhos deixaria os dois
+	// bracos novos soar os dois.
+	bool pertoEstab = false;
+	bool pertoNovo = false;
+
+	if (pn_ == 0) {
+		// nao havia contorno nenhum: o corpo saiu da maquina e voltou, e o
+		// renascimento e de verdade - e o caso do debounce, nao o do limiar
+		churn_.porVazio++;
+		churnPulsoRegista(cx, cy, id, pertoEstab, pertoNovo);
+		return;
+	}
+
+	float melhor = 3.4e38f;
+	int jMelhor = -1;
+	float melhorEstab = 3.4e38f;
+	for (int j = 0; j < pn_; j++) {
+		const float dx = cx - pcx_[j];
+		const float dy = cy - pcy_[j];
+		const float d = dx * dx + dy * dy;
+		if (d < melhor) { melhor = d; jMelhor = j; }
+		if (pids_[j] != id && d < melhorEstab) melhorEstab = d;
+	}
+
+	const float raiz = std::sqrt(melhor);
+	if (std::sqrt(melhorEstab) < CvChurnProbe::PULSO_X) pertoEstab = true;
+	const float x2 = CvChurnProbe::PULSO_X * CvChurnProbe::PULSO_X;
+	for (int k = 0; k < nascN_; k++) {
+		const float dx = cx - nascCx_[k];
+		const float dy = cy - nascCy_[k];
+		if (dx * dx + dy * dy < x2) { pertoNovo = true; break; }
+	}
+
+	if (raiz < match_) {
+		// estava la, dentro do limiar, mas ja tinha dono neste frame: dois
+		// contornos a disputar o mesmo corpo, e o que um casamento por mais
+		// proximo ja nao pode resolver
+		churn_.porOcupado++;
+		churnPulsoRegista(cx, cy, id, pertoEstab, pertoNovo);
+		return;
+	}
+
+	churn_.porLonge++;
+	churn_.somaLonge += raiz;
+	// a pergunta que a distancia nao responde: aquele vizinho longe estava
+	// livre, ou alguem ja o tinha levado? livre e limiar apertado; tomado e a
+	// silhueta a partir-se em dois contornos
+	if (jMelhor >= 0 && taken_[jMelhor]) churn_.longeTomado++;
+	else churn_.longeLivre++;
+
+	int balde = CvChurnProbe::BALDES - 1;
+	const float bordas[CvChurnProbe::BALDES - 1] = { 0.15f, 0.25f, 0.50f, 1.00f };
+	for (int b = 0; b < CvChurnProbe::BALDES - 1; b++) {
+		if (raiz < bordas[b]) { balde = b; break; }
+	}
+	churn_.longe[balde]++;
+
+	churnPulsoRegista(cx, cy, id, pertoEstab, pertoNovo);
+}
+
+// =========================
+void BlobRegistry::churnPulsoRegista(float cx, float cy, int id, bool pertoEstab, bool pertoNovo) {
+
+	// o centro deste nascimento entra na lista dos nascimentos do frame: o
+	// segundo braco a nascer no mesmo frame tem com que se ver
+	if (nascN_ < CvChurnProbe::PULSO_NASC) {
+		nascCx_[nascN_] = cx;
+		nascCy_[nascN_] = cy;
+		nascN_++;
+	}
+
+	// a fila e fixa e autodenuncia-se: encher a fila nao e uma hipotese
+	// academica, e 64 nascimentos em 8 frames = 240/s, e um run com a maquina a
+	// fragmentar-se toda chega la
+	if (pendN_ >= CvChurnProbe::PULSO_FILA) {
+		churn_.pulsoFilaCheia++;
+		return;
+	}
+	CvChurnPendente& p = pend_[pendN_++];
+	p.id = id;
+	p.quando = churn_.frames;
+	p.proximo = 0;
+	p.pertoEstab = pertoEstab;
+	p.pertoNovo = pertoNovo;
+}
+
+// =========================
+void BlobRegistry::churnPulsoResolve() {
+
+	// chamado no endFrame, depois de os centros deste frame estarem publicados e
+	// antes de o relogio avancar: um pendente carimbado no frame F testase
+	// contra a maquina do frame F + idade, que e exatamente o que um debounce de
+	// `idade` frames precisaria de saber antes de soar
+	int k = 0;
+	while (k < pendN_) {
+		const long idade = churn_.frames - pend_[k].quando;
+		const int t = pend_[k].proximo;
+		if (idade < CvChurnProbe::CURVA_IDADE[t]) { k++; continue; }
+
+		bool vive = false;
+		for (int j = 0; j < pn_; j++) {
+			if (pids_[j] == pend_[k].id) { vive = true; break; }
+		}
+
+		if (!vive) {
+			// terminal: morreu antes da proxima idade da curva, e nao conta em
+			// nenhum degrau acima deste
+			churn_.pulsoMorre++;
+			pend_[k] = pend_[--pendN_];
+			continue;
+		}
+
+		churn_.curva[t]++;
+		if (CvChurnProbe::CURVA_IDADE[t] == CvChurnProbe::PULSO_N) {
+			churn_.pulsoVive++;
+			if (!pend_[k].pertoEstab && !pend_[k].pertoNovo) churn_.pulsoSozinho++;
+			else if (pend_[k].pertoEstab) churn_.pulsoPertoEstab++;
+			else churn_.pulsoPertoNovo++;
+		}
+
+		if (++pend_[k].proximo >= CvChurnProbe::CURVA_N) {
+			// terminal pelo topo: atravessou a curva toda com o id vivo
+			churn_.pulsoSaidos++;
+			pend_[k] = pend_[--pendN_];
+			continue;
+		}
+		k++;
+	}
+	churn_.pulsoPendentes = pendN_;
+}
+
+// =========================
 int BlobRegistry::push(const CvBlobBox& box, const ofRectangle& src, int idHint) {
 
 	// as duas rotas ja cortam em CV_MAX_BLOBS antes de chegar aqui; esta linha e
@@ -101,7 +289,14 @@ int BlobRegistry::push(const CvBlobBox& box, const ofRectangle& src, int idHint)
 	if (n_ >= CV_MAX_BLOBS) return -1;
 
 	int age = 0;
-	const int id = matchId(0.5f * (box.x0 + box.x1), 0.5f * (box.y0 + box.y1), idHint, age);
+	const float cx = 0.5f * (box.x0 + box.x1);
+	const float cy = 0.5f * (box.y0 + box.y1);
+	const int id = matchId(cx, cy, idHint, age);
+
+	// a sonda olha depois de tudo estar decidido e nao decide nada: idade zero e
+	// o que o proprio gatilho do pulso le, por isso o que ela conta e exatamente
+	// o que a saida MIDI dispara
+	if (churnAtivo_ && age == 0) churnRegista(cx, cy, id, idHint > 0);
 
 	const int i = n_;
 	n_++;
@@ -123,6 +318,19 @@ void BlobRegistry::endFrame() {
 		pcy_[i] = 0.5f * (boxes_[i].y0 + boxes_[i].y1);
 		pids_[i] = ids_[i];
 		page_[i] = ages_[i];
+	}
+
+	// o frame so fecha para a sonda depois de os centros estarem publicados:
+	// framesSemContorno e o numero que mede o piscar direto, e um frame com zero
+	// contornos e um frame em que tudo o que vier a seguir e nascimento por vazio
+	if (churnAtivo_) {
+		// resolver primeiro, com a maquina deste frame ja publicada e o relogio
+		// ainda no frame em que o pendente nasceu; avancar o relogio antes
+		// adiantaria o debounce em um frame
+		churnPulsoResolve();
+		churn_.frames++;
+		if (n_ == 0) churn_.framesSemContorno++;
+		churn_.casados += matched_;
 	}
 }
 

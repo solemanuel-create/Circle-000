@@ -7,6 +7,9 @@
     <ClCompile Include="src\main.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="src\audioProbe.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
     <ClCompile Include="src\blobModel.cpp">
       <Filter>src</Filter>
     </ClCompile>
@@ -17,6 +20,12 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="src\maskPipeline.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midiOut.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\midiProbe.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="src\paramTable.cpp">
@@ -38,6 +47,9 @@
     <ClInclude Include="src\ofApp.h">
       <Filter>src</Filter>
     </ClInclude>
+    <ClInclude Include="src\audioProbe.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="src\blobModel.h">
       <Filter>src</Filter>
     </ClInclude>
@@ -54,6 +66,12 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="src\maskPipeline.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\midiOut.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\midiProbe.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="src\paramTable.h">

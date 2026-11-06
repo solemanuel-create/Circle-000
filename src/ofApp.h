@@ -11,6 +11,9 @@
 #include "paramTable.h"
 #include "sourceTable.h"
 #include "effectTable.h"
+#include "midiOut.h"
+#include "audioProbe.h"
+#include "midiProbe.h"
 
 #include <atomic>
 #include <thread>
@@ -51,7 +54,7 @@ public:
 	// fonte e (nome, tecla, token de ambiente, o que se procura na lista do
 	// backend, se o c e o v tem o que fazer aqui) mora numa linha; o que um
 	// efeito e (nome, tecla, o inteiro do uEffect) mora noutra. O ofApp passou a
-	// perguntar às tabelas em vez de comparar ids soltos.
+	// perguntar as tabelas em vez de comparar ids soltos.
 	SourceTable sources;
 	EffectTable effects;
 
@@ -110,6 +113,12 @@ public:
 	// addons nao logam nada - e o log dos addons e exatamente o que diagnosticaria
 	// uma dependencia nova. Sem a variavel, a funcao nao faz absolutamente nada.
 	void logProbe();
+
+	// Sonda de procedencia do nascimento (CV0_CHURN), atras da mesma variavel.
+	// De cinco em cinco segundos tira a diferenca dos contadores do registo para
+	// o stderr e para uma linha do HUD. Sem a variavel o `if` de cima nem a
+	// chama: nenhum campo do registo e lido, nenhum contador se move.
+	void churnDump();
 
 	// ----- camera -----
 	// O videoInput do openFrameworks morre ao abrir o dispositivo nesta
@@ -176,6 +185,41 @@ public:
 	// o custo do barramento tem que aparecer no HUD: se ele passar do
 	// orcamento do rastreio, a reacao passou a custar fps
 	double sigMs = 0.0;
+
+	// Pacote 5, passo 1: o resultado da sonda de transporte. O relatorio fica
+	// vivo porque o HUD o le em cada frame, e porque a unica pergunta que ele
+	// responde - que rota de audio abre nesta maquina - nao tem resposta sem
+	// CV0_AUDIOPROBE. Sem a variavel a struct e so um bool false.
+	AudioProbeReport audioProbe;
+
+	// Pacote 5, rota de saida por MIDI: o resultado do laco objetivo (mandar
+	// pela ponta OUT e contar o que volta pela ponta IN do mesmo cabo). Mesma
+	// porta de ambiente da sonda de transporte, variavel propria.
+	MidiProbeReport midiProbe;
+
+	// Pacote 5, o cabo vivo: o barramento sai por aqui e vai para o TouchDesigner
+	// ou para qualquer app atras da porta loopMIDI. Nao e sonda nem opcional -
+	// abre em todo inicio e escolhe a saida por nome. O custo vai para midiMs pelo
+	// mesmo motivo do sigMs: se um dia ele comer o orcamento do frame, e na tela
+	// que isso se ve, nao depois.
+	MidiOut midiOut;
+	double midiMs = 0.0;
+
+	// o master ja decidido, lido pelo cabo em vez de recontado la dentro: o
+	// render e o MIDI tem que mandar exatamente o mesmo numero no mesmo frame
+	float rMaster = 0.0f;
+
+	// ----- sonda de churn (CV0_CHURN) -----
+	// A fotografia anterior dos contadores do registo e o que permite publicar a
+	// diferenca: taxa por janela, nao acumulado desde o inicio do run. A nota e
+	// um array de stack do proprio objeto, sem string, porque o HUD a le em
+	// cada frame e uma medicao que aloca no caminho do desenho engole a si
+	// mesma. Sem a variavel nenhum destes campos e escrito.
+	bool churnAtiva = false;
+	double churnProx = 0.0;
+	double churnUltima = 0.0;
+	CvChurnProbe churnAntes = {};
+	char churnNota[512] = { 0 };
 
 	bool camStalled = false;
 	// As duas origens do frame, calculadas uma vez no update() e lidas por nome
