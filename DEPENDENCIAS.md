@@ -200,6 +200,7 @@ Outras variaveis de runtime, todas com a mesma regra de inercia:
 | `CV0_BLOBAREA` | corte de area minima (`minAreaPct`) para a varredura da fragmentacao; cortado a `0.001..0.05`, que e a faixa da linha do painel, e imprime o valor de palco que substituiu | `src/ofApp.cpp` (`setup`), `CvParams::minAreaPct` |
 | `CV0_MIDIAGE` | **agente, nao sonda**: idade em frames a que um corpo da a nota, cortado a `0..60`; `0` repoe exatamente o gatilho antigo e e por isso que existe, para o A/B ter um lado velho. Padrao compilado `3` | `src/midiOut.cpp` (`setup`), `CV_MIDI_PULSO_IDADE` |
 | `CV0_AUDIOEMIT` | **teste, nao sonda de transporte**: o valor e a duracao em segundos (cortada a `1..30`; texto que nao e numero cai em 5 e diz isso na linha de abertura). Poe na rota que abrir um sinus de 440 Hz a -18 dBFS, constantes chumbadas no fonte | `src/audioProbe.cpp` (`audioEmitRun`), chamado em `ofApp::setup()` |
+| `CV0_AUDIOEMIT_PANEL` | **segunda variavel do mesmo teste, nao um modo**: qualquer valor excepto `0`/`off` pede o painel do proprio ASIO4ALL, e so na rota ASIO. Sem ela o comportamento e o que foi medido antes | `src/audioProbe.cpp` (`audioEmitRun` → `emitRota`) |
 
 O `CV0_BLOBMATCH` e o `CV0_BLOBAREA` nao sao sondas: mudam o comportamento. So
 aparecem em uma tabela porque a medicao das duas alavancas so existe junto com a
@@ -262,6 +263,33 @@ O que nada disso prova e o que importa. O pico e nosso, medido no buffer que nos
 escrevemos; a rota WASAPI/DS nem foi tentada porque o laco para na primeira que
 abre, e a saida fisica do ASIO4ALL e um ajuste do painel dele que este codigo nao
 le. A unica linha que fecha o pacote 5 nao sai do stderr: e ele a dizer se ouviu.
+
+O painel respondeu a essa ultima parte, e por isso o `CV0_AUDIOEMIT_PANEL` existe:
+o mapeamento WDM do ASIO4ALL **so existe em texto dentro daquela janela**. No
+registo (`HKCU:\SOFTWARE\ASIO4ALL v2 by Wuschel`) os dispositivos sao chaves
+hash (`5EDDBCF5`, `9BBAE383`) com `BufferSize 512`, `KernelBuffers 2` e
+`LtcyIn/LtcyOut 32` — estrutura legivel, nomes nao. Aberto pelo proprio app, o
+painel mostra **Realtek(R) Audio** como endpoint activo (com NVIDIA High
+Definition Audio, Kinect USB Audio e NDI Webcam Audio na lista, desligados) e
+`Tamanho da memoria intermediaria ASIO: 512`. E a mesma conta que a emissao usou,
+e o mesmo codec cuja cadeia de APOs e a que quebra o `Audiosrv`: o ASIO4ALL
+nao toca no servico, fala com o pin WDM/kernel do Realtek por cima dele.
+O `ASIOControlPanel` devolve `0` em `0,000 s` — nao bloqueia — e a medicao com o
+painel aberto deu `743 callbacks em 8.00 s | relogio 7.92 s | 380416 amostras |
+pico 0.1258`, ou seja, a janela do driver nao rouba tempo ao transporte.
+
+Duas armadilhas de ferramenta que este passo pagou, e que valem para qualquer
+medicao futura nesta maquina:
+
+- **`reg.exe` a partir do Git Bash nao le nada aqui.** As primeiras respostas
+  "(ausente)" para `HKLM\SOFTWARE\ASIO` eram falsas: o mesmo `reg query` falha
+  ate para chaves que tem de existir. A leitura de registo e so em PowerShell,
+  e com uma chave de controle impressa na mesma saida.
+- **O print de ecra precisa de duas contas antes do recorte.** A tela virtual
+  desta maquina comeca em `x = -1280`, entao uma janela em `6,6` cai em `1286`
+  no png; e sem `SetProcessDPIAware()` o `GetWindowRect` devolve pixeis fisicos
+  enquanto o `CopyFromScreen` devolve virtuais. A primeira captura do painel
+  apanhou o Qoder por cima, nao o painel.
 
 Duas regras que nasceram de sondas que mentiram sem querer, e valem para
 qualquer sonda de igualdade desta arvore:

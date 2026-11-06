@@ -74,6 +74,12 @@ void audioProbeRun(AudioProbeReport& rep);
 // prova que o motorista escreveu N amostras de uma forma de onda com um pico
 // medido dentro do proprio callback; nao prova que o som saiu de lado nenhum.
 // A unica saida honesta dele e "ouvi" ou "nao ouvi".
+//
+// `CV0_AUDIOEMIT_PANEL` (qualquer valor excepto `0`/`off`) pede mais uma coisa,
+// e so na rota ASIO: abre o painel do proprio ASIO4ALL atraves do wrapper
+// ASIOControlPanel que ja esta dentro da rtAudio.lib. Ele existe porque o
+// mapeamento WDM do driver - a resposta para "em que saida fisica isto vai
+// tocar" - so existe em texto lido dentro daquela janela; no registo sao hashes.
 bool audioEmitAtiva();
 
 // Corre o teste. Bloqueia a main thread pela duracao pedida. Inerte sem a

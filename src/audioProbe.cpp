@@ -10,6 +10,13 @@
 #include <cstring>
 #include <thread>
 
+// ASIOControlPanel e o wrapper que o ASIO SDK traz para dentro da rtAudio.lib:
+// o simbolo ?ASIOControlPanel@@YAJXZ foi conferido como membro publico do lib
+// antes de esta linha existir, e e por ela que o painel do ASIO4ALL se abre.
+// So pode ser chamada com um driver ASIO carregado - por dentro ela usa o
+// ponteiro global do driver, e sem driver carregado nao ha retorno possivel.
+long ASIOControlPanel();
+
 namespace {
 
 	// Cada linha sai por stderr assim que existe. O cv0Log do ofApp e local
@@ -328,7 +335,7 @@ namespace {
 	// Abre a primeira rota que abrir, pela mesma ordem da varredura - ASIO
 	// primeiro porque e a unica que nao depende do servico morto - e emite.
 	bool emitRota(RtAudio::Api api, const char* token, double segundos,
-		double dbfs, EmitState& st, std::string& motivo) {
+		double dbfs, EmitState& st, std::string& motivo, bool painel) {
 		std::string ultimoErro;
 		RtAudio ra(api, [&](RtAudioErrorType t, const std::string& e) {
 			ultimoErro = erroNome(t) + ": " + e;
@@ -397,6 +404,25 @@ namespace {
 						+ std::to_string(dbfs).substr(0, 5) + " dBFS = amplitude "
 						+ std::to_string(st.amp).substr(0, 6)
 						+ (st.flutuante ? " (contagem de float32)" : " (contagem de int16)"));
+
+					// o painel e a unica superficie em que o mapeamento WDM do
+					// ASIO4ALL se le sem adivinhar: o registo guarda hashes, nao
+					// nomes. Pede-se por variavel porque uma janela modal nao e
+					// coisa para aparecer num palco, e so faz sentido com um
+					// driver ASIO ja carregado.
+					if (painel && api == RtAudio::WINDOWS_ASIO) {
+						apLog("EMISSAO: a abrir o painel do ASIO4ALL (ASIOControlPanel)...");
+						const auto p0 = std::chrono::steady_clock::now();
+						const long rc = ASIOControlPanel();
+						const double pdur = std::chrono::duration<double>(
+							std::chrono::steady_clock::now() - p0).count();
+						apLog("EMISSAO: ASIOControlPanel devolveu " + std::to_string(rc)
+							+ " em " + std::to_string(pdur).substr(0, 5) + " s"
+							+ (pdur > 0.1 ? " | BLOQUEOU: a janela de medicao comeca depois do painel fechado"
+								: " | nao bloqueou: o tom toca com o painel aberto"));
+					} else if (painel) {
+						apLog("EMISSAO: painel pedido mas a rota nao e ASIO - nada a abrir");
+					}
 
 					const auto wall0 = std::chrono::steady_clock::now();
 					std::this_thread::sleep_for(std::chrono::milliseconds((int)(segundos * 1000)));
@@ -536,10 +562,18 @@ void audioEmitRun() {
 	const char* tokens[] = { "asio", "wasapi", "ds" };
 
 	EmitState st;
+	// o painel e uma segunda variavel, nao um modo do teste: sem ela o
+	// comportamento e exatamente o que foi medido antes
+	const std::string painel = envStr("CV0_AUDIOEMIT_PANEL");
+	const bool querPainel = !painel.empty() && painel != "0" && painel != "off";
+	if (querPainel)
+		apLog("EMISSAO: CV0_AUDIOEMIT_PANEL pedido - a janela do driver vai abrir-se "
+			"sobre o app e so um clique a fecha.");
+
 	bool abriuAlguma = false;
 	for (int i = 0; i < 3 && !abriuAlguma; ++i) {
 		std::string motivo;
-		abriuAlguma = emitRota((RtAudio::Api)ordem[i], tokens[i], segundos, EMIT_DBFS, st, motivo);
+		abriuAlguma = emitRota((RtAudio::Api)ordem[i], tokens[i], segundos, EMIT_DBFS, st, motivo, querPainel);
 		if (!abriuAlguma) apLog("EMISSAO: " + motivo);
 	}
 
