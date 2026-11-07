@@ -466,7 +466,9 @@ Tres coisas que so a medicao podia dizer:
 Limites declarados pela propria sonda: `cam->tela` comeca no `read()`, portanto a
 idade do frame dentro do driver e do USB antes de o ler **nao entra** no numero,
 e e justamente a fatia que falta ao orcamento de 120 ms; e `nasce->nota` so tem
-valor quando ha gente em cena.
+valor quando ha gente em cena. A primeira destas duas cotas tem casa propria
+desde o passo 61, no sub-capitulo seguinte; a segunda continua a pertencer a um
+ensaio.
 
 Do `nasce->nota`: uma amostra no ON (75,6 ms) e zero no OFF, porque nas duas
 corridas nenhum corpo chegou aos 3 frames de vida -- a sala estava vazia. Na
@@ -489,6 +491,83 @@ peca. Ja tinha sido medido em 2026-11-05 e passa sozinho em ~10 min. O
 `cv0_p60_run.ps1` (em `%TEMP%`) po por isso uma porta de saude: so mede quando a
 linha `[fonte]` diz `MSMF`, descansa 45 s entre tentativas e espera 9 min antes
 da primeira.
+
+### O setimo canal (`driver->idade`) e o carimbo que nao existe
+
+O passo 61 foi pedido como "medir a idade do frame dentro do driver por
+`cv::CAP_PROP_FRAME_TIMESTAMP`". Essa propriedade **nao existe nesta build** e
+foi preciso espreitar o header para o saber, porque nada a pede em voz alta: o
+enum `VideoCaptureProperties` do OpenCV 4.11 que o ofxOpenCv traz
+(`addons/ofxOpenCv/libs/opencv/include/opencv2/videoio.hpp`, linhas 140-215)
+vai de 0 a 72 e nao tem nenhuma marca de tempo por frame. As duas candidatas
+que la estao declaram no comentario ser do backend FFmpeg -- `CAP_PROP_PTS` (71)
+e `CAP_PROP_STREAM_OPEN_TIME_USEC` (55) -- e FFmpeg nao esta nesta maquina. O
+perigo real nao e o `cap.get()` falhar: uma propriedade que nao existe nao
+devolve um erro, devolve o numero da propriedade que ocupa aquele indice, e 30
+e `ISO_SPEED`, 29 e `GUID`. Um "0" lido de la seria interpretado como "o frame
+e fresco".
+
+O que ficou no lugar e uma cota deduzida do ritmo de entrega, e vai escrita como
+cota:
+
+- cada `cap.read()` e carimbado por dentro (`ofApp::update`, duas chamadas de
+  `steady_clock` so quando `CV0_SYNC` existe);
+- espera >= 2 ms = a fila estava **vazia** no inicio da chamada, portanto o
+  frame que ela trouxe foi produzido depois desse inicio e a sua idade e no
+  maximo o tempo que a chamada esperou;
+- espera < 2 ms = o frame ja la estava, e como nada na fila pode ter sido
+  produzido antes do inicio do ciclo, a idade e no maximo `agora - inicio do
+  ciclo`;
+- `rajada` conta as leituras instantaneas consecutivas, que e a assinatura de
+  agrupamento do backend em inteiro, e nao em milisegundos.
+
+Medido numa passe de ~35 s com a integrada em `MSMF #1` (991 frames de fonte,
+`fora 0` em todos os canais):
+
+| quantidade | valor |
+|---|---|
+| `driver->idade` min / med / p90 / max | 10,7 / 58,7 / 72,9 / 214,6 ms |
+| leituras que esperaram / instantaneas | 493 / 498 de 991 |
+| rajadas: comprimento 1 / 2 / 5 | 419 / 37 / 1 |
+| `cam->tela` (o que a peca faz) med | 2,7 ms |
+| **`camera real->tela` (limite)** | **<= 61,4 .. 83,4 ms** |
+
+Tres coisas que valiam a corrida:
+
+1. **A fatia que faltava ao orcamento de 120 ms era a maior de todas.** Os seis
+   canais de passo 60 somavam ~9,4 ms entre o `read()` e o fim do draw; o que o
+   pixel ja tinha vivido antes de chegar la e ate 59 ms de mediana e 73 ms de
+   p90. O orcamento fecha-se por baixo: mesmo a pior leitura medida (idade p90 +
+   `cam->tela` p90) sao 83,4 ms, com ~37 ms de folga, e a saida fisica do
+   ASIO4ALL (buffer 512 = 10,7 ms) ainda nem entrou nela porque nao e legivel
+   sem perguntar ao driver.
+2. **A bimodalidade do `swap` tem agora nome e tamanho.** Metade das leituras
+   espera e metade apanha a fila cheia, e 37 rajadas de 2 + uma de 5 dao o
+   formato do agrupamento: o backend entrega aos pares, e por isso os 6 ms de
+   metade dos draws e os 65 ms da outra metade. Nao e o loop a flutuar, e a
+   fila, e a idade que ela paga e a que a tabela acima mede.
+3. **O limite e um teto, nao uma estimativa, e diz-se.** Numa entrega aos pares,
+   o frame mais velho do par tinha de estar vivo a meia periodo, nao aos 59 ms
+   inteiros: o que a ausencia do carimbo nao permite e separar as duas coisas
+   por mediem. Para fechar isso ha duas rotas e nenhuma delas e um numero do
+   fonte: ler o `IMFSample` pelo Media Foundation a mao (um caminho de captura
+   novo por cima do `cv::VideoCapture`) ou filmar a propria projecao com a
+   segunda camera e medir o atraso entre o frame desenhado e o frame visto, que
+   e o unico numero que inclui ate a exposicao do sensor.
+
+O controlo negativo voltou a fechar a conta do custo: sem `CV0_SYNC` a passe nao
+emite **uma** linha `[sync]`, e os callbacks do motor batem certo com a corrida
+armada janela a janela (470 e 469 nos ultimos 5,00 s nas duas; relogio acumulado
+35,02 s nas duas; `dentro do callback` 0,086 contra 0,087 ms). Com a sonda
+armada a saida passou a custar 0,046 a 0,147 ms por janela, porque sao sete
+canais a ordenar em vez de seis.
+
+Armadilha de leitura deixada a descoberto por esta corrida, e ainda nao
+remendada porque mudar a linha e muda-la tambem na passagem anterior: quando
+`nasce->nota` nao tem amostras, a composta escreve `med 0.0` e o `transporte`
+sai negativo (`0 - 3xswap` = `-23,4`). O AVISO de "nenhuma nota saiu pelo
+motorista" esta na mesma linha, mas um numero negativo a pedir ao leitor que o
+some nao e uma ausencia dita em voz alta.
 
 ## 9. Armadilhas ja pagas, listadas para quem chegar depois
 
@@ -534,3 +613,9 @@ da primeira.
   de audio do Windows, quebrou 67 vezes em dois dias com `0xc0000005`, em ciclo
   de poucos minutos (contado no Application Log em 2026-11-06). Som em cena
   depende desse servico, nao so do nosso `ofSoundStream`.
+- `cv::CAP_PROP_FRAME_TIMESTAMP` **nao existe** no OpenCV 4.11 do ofxOpenCv
+  (enum em `videoio.hpp`: 0 a 72, sem marca de tempo por frame; `CAP_PROP_PTS`
+  e `CAP_PROP_STREAM_OPEN_TIME_USEC` sao FFmpeg-only e FFmpeg nao esta aqui).
+  Pedir por indice nao da erro, da outra propriedade: 30 e `ISO_SPEED`, 29 e
+  `GUID`. A idade do pixel dentro do backend passou a sair como **limite**
+  deduzido do ciclo de entrega, no setimo canal do `CV0_SYNC`.

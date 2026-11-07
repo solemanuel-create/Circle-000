@@ -37,6 +37,7 @@
 //   PUB_CB    publicacao no motor         bloco que a le       motorista
 //   NASCE_CB  nascimento do corpo         bloco que o toca     motorista
 //   NASCE_PUB nascimento do corpo         publicacao da nota   main
+//   IDADE     inicio do ciclo de entrega  entrega deste frame  main
 //
 // Os tres pedidos sao compostos por cima destes:
 //
@@ -52,6 +53,40 @@
 //   nasce->nota    = NASCE_CB, que e o unico dos tres medido de ponta a ponta
 //                    sem soma: o carimbo do nascimento viaja dentro do Evento
 //                    ate ao bloco que o toca.
+//
+// O canal IDADE existe porque os seis acima comecam todos no instante em que
+// `cap.read()` voltou, e esse instante nao e o instante do pixel: entre o
+// sensor expor e a chamada nos devolver ja la vao a transferencia e a fila do
+// backend. Era para esta linha sair de `cv::CAP_PROP_FRAME_TIMESTAMP` e nao
+// sai, por um motivo que tem de ficar escrito em vez de ser descoberto por
+// quem chegar depois: essa propriedade nao existe nesta build. O enum de
+// `videoio.hpp` do OpenCV 4.11 aqui instalado vai de 0 a 72 e nao tem nenhuma
+// marca de tempo por frame; as duas candidatas que tem, `CAP_PROP_PTS` (71) e
+// `CAP_PROP_STREAM_OPEN_TIME_USEC` (55), dizem no proprio header que sao do
+// backend FFmpeg, e FFmpeg nao esta nesta maquina. Chamar `cap.get()` com um
+// numero inventado nao daria um erro, daria outra coisa: 30 e ISO_SPEED e 29 e
+// GUID, e uma propriedade que nao existe devolve um numero que existe.
+//
+// Entao o que se mede e o que o ritmo de entrega obrig a admitir, e isso tem
+// de ser dito como o que e: um LIMITE SUPERIOR da idade, nao uma marca do
+// driver. Numa fila FIFO, uma leitura que bloqueia prova que a fila estava
+// vazia quando comecou, portanto o frame que ela devolveu foi produzido
+// depois desse inicio, e a sua idade e no maximo o tempo que a chamada esperou.
+// As leituras seguintes que nao bloquearam nada tinham na frente o mesmo
+// marco de inicio - a fila que elas vao esvaziando foi toda produzida depois
+// dele - e a idade de cada uma e no maximo `agora - inicio do ciclo`. Quando a
+// leitura seguinte volta a bloquear, o ciclo fecha-se e um novo comeca. O que
+// a linha acusa em `rajada` e o que este canal nao e: o numero de frames que o
+// backend entregou de uma so vez, que e a assinatura de agrupamento que os
+// percentis do SWAP ja mostravam e que aqui ganha nome e tamanho.
+//
+// Duas cotas ficam declaradas porque sao mesmo cotas e nao numeros: a) o limite
+// nao cobre o frame ainda em voo na transferencia USB, que para o backend ja
+// esta entregue; b) sem o carimbo do driver nao ha como saber qual dos frames
+// de uma rajada e o mais velho, so que nenhum e mais velho que o ciclo. E por
+// isso que a camera->tela passa a sair em tres partes: a idade possivel do
+// pixel, o que a peca faz com ele, e a soma dos dois como o numero que o
+// orcamento de 120 ms pede.
 //
 // O relogio e um so, e nao e o do openFrameworks. `ofGetElapsedTimeMicros` e,
 // por definicao, o tempo do processo, e so a main thread o pode chamar em
@@ -80,6 +115,7 @@ enum CvSyncCanal {
 	CSYNC_PUB_CB,
 	CSYNC_NASCE_CB,
 	CSYNC_NASCE_PUB,
+	CSYNC_IDADE,
 
 	CSYNC_N
 };
@@ -109,6 +145,12 @@ public:
 	// ----- main thread -----
 	// Um frame do sensor chegou. `t` e o instante logo a seguir ao grab bloqueante.
 	void frameChega(long long t);
+
+	// Uma chamada de captura acabou, e `t0`/`t1` sao os dois instantes dela no
+	// mesmo relogio da sonda. So se chama na rota do cv::VideoCapture: o 1473 nao
+	// passa por la, e onde nao ha fila de backend nao ha idade para acusar.
+	void leituraFeita(long long t0, long long t1);
+
 	// O motor acabou de publicar os atomicos deste frame.
 	void pubFim(long long t);
 	// O draw deste frame acabou. O swap vem depois disto e nao e nosso.
@@ -200,6 +242,24 @@ private:
 	// seria uma idade de seculo
 	std::atomic<long long> pubUs_;
 
+	// ----- o ciclo de entrega -----
+	// Uma leitura que bloqueia abre o ciclo e a seguinte que bloqueia fecha-o:
+	// entre as duas, tudo o que o backend deu ja foi produzido depois do inicio
+	// da primeira. E por isso que o marco vive aqui dentro e nao em ofApp: o que
+	// lhe da nome e uma propriedade da fila, e quem o poe tem de ser quem o le.
+	// Nada disto e um numero de comportamento - sao contadores de uma coisa que
+	// ja acontecia.
+	static const long long ESPERA_UMBRAL = 2000;
+	static const int HIST_N = 9;
+
+	long long cicloT0_;
+	int  rajada_;
+	long nLeituras_;
+	long nEspera_;
+	long nRajadas_;
+	long rajadaMax_;
+	long hist_[HIST_N];
+
 	long nFonte_;
 	bool vsync_;
 	int idadePulso_;
@@ -209,8 +269,10 @@ private:
 	long long janelaT0_;
 	double janelaS_;
 
-	// as duas notas, escritas uma vez por janela e lidas em cada frame
-	char tick_[1536];
+	// as duas notas, escritas uma vez por janela e lidas em cada frame. O `tick_`
+	// cresceu com o setimo canal e com a linha da rajada: os sete canais com
+	// delta sao ~520 caracteres, e a composta com a idade sao ~420.
+	char tick_[2048];
 	char hud_[256];
 
 	// o deposito para o nth_element: 16 KB que nao vivem na stack de ninguem e

@@ -30,7 +30,8 @@ namespace {
 	}
 
 	const char* NOME[CSYNC_N] = {
-		"cam->tela", "swap", "cam->pub", "pub->bloco", "nasce->nota", "nasce->pub"
+		"cam->tela", "swap", "cam->pub", "pub->bloco", "nasce->nota", "nasce->pub",
+		"driver->idade"
 	};
 }
 
@@ -52,6 +53,13 @@ CvSyncProbe::CvSyncProbe()
 	tick_[0] = 0;
 	hud_[0] = 0;
 	for (int i = 0; i < CSYNC_N; i++) nAntes_[i] = 0;
+	for (int i = 0; i < HIST_N; i++) hist_[i] = 0;
+	cicloT0_ = -1;
+	rajada_ = 0;
+	nLeituras_ = 0;
+	nEspera_ = 0;
+	nRajadas_ = 0;
+	rajadaMax_ = 0;
 }
 
 // =========================
@@ -72,6 +80,19 @@ void CvSyncProbe::setAtivo(bool a) {
 	temFrame_ = false;
 	pubUs_.store(0);
 	nFonte_ = 0;
+
+	// o marco do ciclo de entrega entra nesta limpeza pela mesma razao que o
+	// `drawUs_`: sem ele, a primeira leitura de uma corrida armada a meio do
+	// processo herdaria um marco posto antes de a medicao existir, e a idade
+	// desse frame seria o tempo desde o setup, nao o tempo da fila.
+	cicloT0_ = -1;
+	rajada_ = 0;
+	nLeituras_ = 0;
+	nEspera_ = 0;
+	nRajadas_ = 0;
+	rajadaMax_ = 0;
+	for (int i = 0; i < HIST_N; i++) hist_[i] = 0;
+
 	janelaT0_ = agora();
 	tick_[0] = 0;
 	hud_[0] = 0;
@@ -98,6 +119,51 @@ void CvSyncProbe::frameChega(long long t) {
 	frameUs_ = t;
 	temFrame_ = true;
 	nFonte_++;
+}
+
+// =========================
+void CvSyncProbe::leituraFeita(long long t0, long long t1) {
+
+	if (!ativo_) return;
+
+	// um relogio que retrocedeu nao e uma idade negativa para somar ao resto: e
+	// uma leitura de que nada se sabe, e sai contada no `fora` do anel em vez de
+	// sair como zero, que e o valor que uma leitura distraida chamaria "sem
+	// latencia".
+	if (t1 < t0) { anel_[CSYNC_IDADE].fora++; return; }
+	nLeituras_++;
+
+	const long long espera = t1 - t0;
+
+	if (espera >= ESPERA_UMBRAL) {
+
+		// esta leitura esperou, logo a fila estava vazia quando ela comecou: o
+		// marco do ciclo e o seu proprio inicio e a idade do frame que ela trouxe
+		// e no maximo o tempo que ela esperou. E a unica idade desta sonda que nao
+		// depende de hipotese nenhuma sobre o ritmo do sensor.
+		if (rajada_ > 0) {
+			nRajadas_++;
+			if (rajada_ > rajadaMax_) rajadaMax_ = rajada_;
+			const int i = rajada_ < HIST_N ? rajada_ : HIST_N - 1;
+			hist_[i]++;
+		}
+		rajada_ = 0;
+		nEspera_++;
+		cicloT0_ = t0;
+		anel_[CSYNC_IDADE].escreve(espera);
+		return;
+	}
+
+	// Leituras instantaneas so tem idade conhecida a partir do momento em que ha
+	// um marco; antes do primeiro ciclo o que se sabe e que a fila tinha algo,
+	// nao desde quando.
+	if (cicloT0_ < 0) return;
+
+	// O frame ja estava na fila quando o ciclo abriu, e foi produzido depois do
+	// inicio dele - se tivesse sido produzido antes, teria sido este o que a
+	// leitura que bloqueou trouxe. Daqui sai o limite superior, nao um numero.
+	rajada_++;
+	anel_[CSYNC_IDADE].escreve(t1 - cicloT0_);
 }
 
 // =========================
@@ -226,20 +292,53 @@ double CvSyncProbe::resumo(long long agoraJanela) {
 	}
 
 	const double gat = (double)idadePulso_ * est_[CSYNC_SWAP].med;
+
+	// A idade do backend nao e mais um degrau medido: e o que os seis canais de
+	// cima ainda nao tinham casa, e por isso entra como LIMITE, nao como soma.
+	// Os dois numeros que a camera->tela passa a ter dao o intervalo em que o
+	// orcamento de 120 ms se move quando o pixel ja era velho antes de nos chegar.
+	const double idadeMed = est_[CSYNC_IDADE].med;
+	const double idadeP90 = est_[CSYNC_IDADE].p90;
+	const double realInf = idadeMed + telaInf;
+	const double realSup = idadeP90 + telaSup;
+
+	w = snprintf(p, left, " | CICLO leitura %ld | esperou %ld | instantaneas %ld | rajadas %ld | max %ld | hist",
+		nLeituras_, nEspera_, nLeituras_ - nEspera_, nRajadas_, rajadaMax_);
+	if (w > 0 && (size_t)w < left) { p += w; left -= (size_t)w; }
+	for (int i = 0; i < HIST_N; i++) {
+		w = snprintf(p, left, " %d:%ld", i, hist_[i]);
+		if (w > 0 && (size_t)w < left) { p += w; left -= (size_t)w; }
+	}
+
 	w = snprintf(p, left,
-		" | COMPOSTO cam->tela %.1f..%.1f | cam->som %.1f(+driver) | nasce->nota %.1f | dos quais gatilho %dxswap=%.1f e transporte=%.1f | soma das medianas, nao a mediana da soma",
-		telaInf, telaSup, somMeio, notaMed, idadePulso_, gat, notaMed - gat);
+		" | COMPOSTO cam->tela %.1f..%.1f | +idade driver <= %.1f (p90 %.1f) => camera real->tela <= %.1f..%.1f | cam->som %.1f(+saida do driver) | nasce->nota %.1f | dos quais gatilho %dxswap=%.1f e transporte=%.1f | soma das medianas, nao a mediana da soma",
+		telaInf, telaSup, idadeMed, idadeP90, realInf, realSup,
+		somMeio, notaMed, idadePulso_, gat, notaMed - gat);
 	if (w > 0 && (size_t)w < left) { p += w; left -= (size_t)w; }
 
 	// as duas acusacoes da sonda: uma janela sem amostras num canal nao e um
 	// zero, e um canal que nao existiu, e dizer isso e o que evita que o numero
 	// ausente seja lido como "zero milisegundos"
+	int aw = 0;
 	if (nFonte_ == 0)
-		snprintf(p, left, " | AVISO: nenhum frame de fonte viva nesta corrida");
+		aw = snprintf(p, left, " | AVISO: nenhum frame de fonte viva nesta corrida");
 	else if (est_[CSYNC_NASCE_CB].n == 0)
-		snprintf(p, left, " | AVISO: nenhuma nota saiu pelo motorista: nenhum corpo chegou a idade do gatilho");
+		aw = snprintf(p, left, " | AVISO: nenhuma nota saiu pelo motorista: nenhum corpo chegou a idade do gatilho");
 	else if (est_[CSYNC_PUB_CB].n == 0)
-		snprintf(p, left, " | AVISO: nenhum callback do motorista: a rota nao abriu ou esta muda");
+		aw = snprintf(p, left, " | AVISO: nenhum callback do motorista: a rota nao abriu ou esta muda");
+	if (aw > 0) {
+		const int adv = aw < (int)left ? aw : (int)left - 1;
+		p += adv; left -= (size_t)adv;
+	}
+
+	// e a acusacao do setimo canal, que nao compete com as de cima porque pergunta
+	// outra coisa: um `driver->idade` sem amostras nao e "zero milisegundos de
+	// fila", e uma fonte que nao passa pelo cv::VideoCapture - o 1473 vai pelo
+	// NuiApi, onde nao ha fila nenhuma para medir - ou uma corrida sem leituras
+	// carimbadas. Dizer isto em voz alta e o que impede a ausencia de ser lida
+	// como a melhor noticia possivel.
+	if (est_[CSYNC_IDADE].n == 0 && nFonte_ > 0)
+		snprintf(p, left, " | AVISO: driver->idade sem amostras: a fonte nao e cv::VideoCapture (NuiApi nao tem fila de backend) e o limite do driver nao foi medido");
 
 	// a linha do HUD e o resumo dos resumos: o que ele precisa de ver ao centro
 	// da sala sao os tres numeros, nao os seis canais. O `fps` e o inverso do
@@ -248,8 +347,8 @@ double CvSyncProbe::resumo(long long agoraJanela) {
 	const double notaP90 = est_[CSYNC_NASCE_CB].p90;
 	const double fps = est_[CSYNC_SWAP].med > 0.0 ? 1000.0 / est_[CSYNC_SWAP].med : 0.0;
 	snprintf(hud_, sizeof(hud_),
-		"cam->tela %.0f..%.0f ms | cam->som %.0f ms | nasce->nota %.0f..%.0f ms | swap %.1f (%.1f fps) | cb %ld/%ld | vsync %s",
-		telaInf, telaSup, somMeio, notaMed, notaP90,
+		"cam->tela %.0f..%.0f ms | id<=%.0f | cam->som %.0f ms | nasce->nota %.0f..%.0f ms | swap %.1f (%.1f fps) | cb %ld/%ld | vsync %s",
+		telaInf, telaSup, idadeMed, somMeio, notaMed, notaP90,
 		est_[CSYNC_SWAP].med, fps,
 		est_[CSYNC_PUB_CB].n, nFonte_, vsync_ ? "ON" : "OFF");
 

@@ -616,9 +616,23 @@ void ofApp::update() {
 	if (capOk || kinectOk) {
 		double t0 = ofGetElapsedTimeMicros();
 
+		// O par de instantes da captura e o que da nome ao ciclo de entrega do
+		// setimo canal: a duracao do grab bloqueante e a unica coisa que diz, sem
+		// o carimbo do driver, se a fila do backend estava vazia quando a chamada
+		// comecou - e esse carimbo esta build do OpenCV nao expoe. Custa duas
+		// chamadas de relogio por frame, e so quando a medicao foi pedida.
+		const long long c0 = syncAtiva ? CvSyncProbe::agora() : 0;
+
 		int kFlags = 0;
 		if (kinectOk) kFlags = kinect.grab(kColor, kDepth);
 		else frameNew = cap.read(mFrame) && !mFrame.empty();
+
+		const long long c1 = syncAtiva ? CvSyncProbe::agora() : 0;
+
+		// So a rota do cv::VideoCapture tem fila de backend. O 1473 entrega pelo
+		// NuiApi com timeout proprio, e la nao ha idade de fila para acusar: o
+		// canal fica sem amostras e a linha diz isso em vez de dizer zero.
+		if (syncAtiva && !kinectOk && frameNew) syncProbe.leituraFeita(c0, c1);
 
 		// no Kinect os dois streams tem ritmos diferentes (cor 15, profundidade
 		// 30): a maquina manda no ciclo e a cor e bem-vinda quando chegar
