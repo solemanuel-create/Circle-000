@@ -1,4 +1,5 @@
 #include "audioEngine.h"
+#include "syncProbe.h"
 #include "RtAudio.h"
 
 #include <direct.h>
@@ -117,10 +118,16 @@ namespace {
 	// motorista. Os tres campos vao em bytes porque a fila e um anel de
 	// copiaveis triviais e um `float` a meio de uma troca seria um problema a
 	// menos para pensar.
+	//
+	// O `nasceUs` nao muda nada do que toca: e o carimbo do nascimento a viajar
+	// dentro do Evento para a thread do motorista poder subtrair-lhe a propria
+	// hora. Sem a sonda armada fica zero, e zero e o valor que a sonda le como
+	// "desarmada" - o anel nao e tocado, o sintetizador nem olha para ele.
 	struct Evento {
 		unsigned char nota = 60;
 		unsigned char vel = 100;
 		unsigned char pan = 128;
+		long long nasceUs = 0;
 	};
 
 	struct Pulso {
@@ -788,6 +795,10 @@ struct AudioEngine::Ctx {
 	Evento fila[CV_AUDIO_FILA];
 	std::atomic<long> perdidos{ 0 };
 
+	// a sonda de sincronia, apontada pelo setSyncProbe antes do setup e copia
+	// para aqui porque o callback so conhece o Ctx. Nulo e o estado de sempre.
+	CvSyncProbe* sync = nullptr;
+
 	Sint st;
 
 	std::atomic<long> callbacks{ 0 };
@@ -851,6 +862,16 @@ int engCallback(void* out, void* in, unsigned nFrames, double streamTime,
 	}
 	c->rabo.store(rabo);
 
+	// A sonda de sincronia, se alguem a armou. O instante e o da entrada no
+	// callback, nao o de agora: o que se quer saber e ha quanto tempo este bloco
+	// espera pelos numeros que a main publicou, e desde quando este corpo nasceu.
+	// Nada aqui aloca, chama OF ou toca no sintetizador.
+	if (c->sync) {
+		const long long ts = CvSyncProbe::de(t0);
+		c->sync->cbFim(ts);
+		for (int i = 0; i < nEv; i++) c->sync->nota(ev[i].nasceUs, ts);
+	}
+
 	sintetiza(static_cast<float*>(out), nFrames, c->canais, (double)c->taxa,
 		s, c->st, ev, nEv, (double)c->nivel);
 
@@ -892,10 +913,20 @@ AudioEngine::~AudioEngine() {
 	close();
 }
 
+// =========================
+void AudioEngine::setSyncProbe(CvSyncProbe* s) {
+
+	// Tem de ser antes do setup(): o contexto nasce la dentro e e ele que o
+	// callback ve. Apontar depois de a rota estar aberta deixaria os primeiros
+	// blocos sem carimbo, que sao justamente os que se quer ver.
+	sync_ = s;
+}
+
 bool AudioEngine::setup() {
 
 	cx_.reset(new Ctx());
 	Ctx& c = *cx_;
+	c.sync = sync_;
 	for (int z = 0; z < CV_ZONES; z++) c.pZ[z].store(0.0f);
 	c.nivel = (float)pow(10.0, dbfs_ / 20.0);
 
@@ -1095,6 +1126,15 @@ void AudioEngine::publish(const CvSignals& sig, float master, const BlobRegistry
 			+ (cy < 0.5f ? 12 : 0));
 		e.vel = (unsigned char)(40 + (int)(area * 87.0f));
 		e.pan = (unsigned char)(cx * 255.0f);
+
+		// o carimbo do nascimento segue com a nota, e o que permite ao motorista
+		// dizer "deste corpo ao som que dele saiu vao X ms" sem que a main e ele
+		// tenham de concordar em mais nada. Sem sonda, nasceUs fica zero e o
+		// Evento e byte a byte o que sempre foi nos tres campos que ele le.
+		if (c.sync) {
+			e.nasceUs = blobs.bornUsAt(i);
+			c.sync->notaPublicada(e.nasceUs, CvSyncProbe::agora());
+		}
 
 		// o anel e de um produtor e um consumidor, por isso o espaco vazio e
 		// sempre um slot a menos e o que nao cabe e contado, nunca perdido em

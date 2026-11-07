@@ -37,6 +37,9 @@
     <ClCompile Include="src\sourceTable.cpp">
       <Filter>src</Filter>
     </ClCompile>
+    <ClCompile Include="src\syncProbe.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
     <ClCompile Include="src\effectTable.cpp">
       <Filter>src</Filter>
     </ClCompile>
@@ -87,6 +90,9 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="src\effectTable.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\syncProbe.h">
       <Filter>src</Filter>
     </ClInclude>
   </ItemGroup>

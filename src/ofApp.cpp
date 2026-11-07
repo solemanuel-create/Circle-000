@@ -128,6 +128,50 @@ void ofApp::setup() {
 	// fica aqui na main e nao numa thread.
 	midiOut.setup();
 
+	// Sonda de sincronia (CV0_SYNC). Armada ANTES do motor de sintese por uma
+	// razao de relogio e nao de gosto: o contexto do motorista nasce dentro do
+	// setup() dele e e so esse contexto que o callback ve, por isso quem quiser
+	// a idade dos numeros que ele le tem de la estar quando ele for chamado a
+	// primeira vez. Sem a variavel nada aqui acontece - e de proposito nem o
+	// ofSetVerticalSync e tocado, porque armar uma medicao nao pode mudar a
+	// janela de quem nao a pediu.
+	{
+		char buf[8] = { 0 };
+		size_t got = 0;
+		if (getenv_s(&got, buf, sizeof(buf), "CV0_SYNC") == 0 && got > 0 && buf[0] != '0') {
+			syncProbe.setAtivo(true);
+			syncProbe.setPulseAge(midiOut.idade());
+			audioEngine.setSyncProbe(&syncProbe);
+			syncAtiva = true;
+			syncProx = CHURN_PASSO_S;
+
+			// As duas corridas pedidas distinguem-se por uma variavel e o
+			// padrao e ON, que e o que o openFrameworks faz por omissao. Po-lo
+			// explicitamente em vez de o assumir e o que permite a linha dizer
+			// a condicao em que rodou, e o que a sonda le de volta do GLFW e o
+			// numero - nao o que foi pedido.
+			char vb[16] = { 0 };
+			size_t gvb = 0;
+			bool on = true;
+			if (getenv_s(&gvb, vb, sizeof(vb), "CV0_SYNC_VSYNC") == 0 && gvb > 0) {
+				const string s = lower(string(vb));
+				on = !(s == "off" || s == "0" || s == "n" || s == "false");
+			}
+			ofSetVerticalSync(on);
+			// Nao ha leitura de volta: o OF so expoe o setter, e o glfwSwapInterval
+			// nao devolve nada nem guarda o estado em lugar consultavel. O que a
+			// linha mostra e o pedido, e a prova de que ele bateu e o canal SWAP.
+			syncProbe.setVsync(on);
+
+			char b[192];
+			::sprintf_s(b, sizeof(b), "sonda ligada: vsync %s por %s (leitura de volta nao existe na OF), pulso aos %d frames de vida, janela %.0f s",
+				syncProbe.vsyncPedido() ? "ON" : "OFF",
+				gvb > 0 ? "CV0_SYNC_VSYNC" : "padrao da casa",
+				midiOut.idade(), CHURN_PASSO_S);
+			cv0Log("sync", b);
+		}
+	}
+
 	// O motor de sintese vem a seguir pelo mesmo motivo do cabo: abre na main,
 	// leva uma fracao de frame a enumerar dispositivos e fala em stderr. Depois
 	// dele a rota de audio desta maquina fica tomada para toda a vida do
@@ -581,6 +625,12 @@ void ofApp::update() {
 		const bool haveColor = kinectOk ? (kFlags & 1) != 0 : frameNew;
 		const bool haveFrame = kinectOk ? (kFlags & 2) != 0 : frameNew;
 
+		// O carimbo da chegada e o instante em que os pixels do sensor estao
+		// nesta process e nao um numero do driver: tudo o que a sonda mede a
+		// partir daqui e o que a peca faz com eles, e a espera do sensor ja tem
+		// casa propria no `espera camera` do HUD
+		if (syncAtiva && (haveColor || haveFrame)) syncProbe.frameChega(CvSyncProbe::agora());
+
 		double t1 = ofGetElapsedTimeMicros();
 
 		if (haveColor) {
@@ -632,6 +682,13 @@ void ofApp::update() {
 	applyGains();
 	sigMs = ema(sigMs, (ofGetElapsedTimeMicros() - s0) / 1000.0);
 
+	// O carimbo que os nascimentos deste frame levam. E tirado aqui, logo antes
+	// do empurrao e depois da maquina ter fechado os contornos, porque
+	// "nascimento" para a peca e o instante em que um id novo passou a existir
+	// no registo - nao o instante em que o pixel dele chegou ao sensor, que ja
+	// tem canal proprio.
+	if (syncAtiva) blobs.setSyncFrameUs(CvSyncProbe::agora());
+
 	if (origin.tracksSource) pushCameraBlobs();
 	else pushSyntheticBlobs(dt);
 
@@ -649,10 +706,15 @@ void ofApp::update() {
 	// motorista e o custo dela sai no tick de cinco em cinco segundos.
 	double a0 = ofGetElapsedTimeMicros();
 	audioEngine.publish(sig, rMaster, blobs, midiOut.idade());
+	// O carimbo e logo a seguir ao publish e nao depois do tick: o que o
+	// motorista le sao os atomicos que esta linha deixou, e o tick e a nossa
+	// propria saida, que nao pertence ao caminho do som
+	if (syncAtiva) syncProbe.pubFim(CvSyncProbe::agora());
 	audioEngine.tick();
 	audioMs = ema(audioMs, (ofGetElapsedTimeMicros() - a0) / 1000.0);
 
 	if (churnAtiva) churnDump();
+	if (syncAtiva) syncDump();
 }
 
 // =========================
@@ -758,6 +820,27 @@ void ofApp::churnDump() {
 	cv0Log("churn", churnNota);
 
 	churnAntes = c;
+}
+
+// =========================
+void ofApp::syncDump() {
+
+	// A sincronia nao tem janela propria: cinco segundos e o passo que a casa
+	// ja usa para o churn, e duas sondas com relogios diferentes numa so corrida
+	// sao duas narrativas que nao se podem somar. O que aqui se imprime e o que
+	// a sonda calculou la dentro, uma vez por janela, porque ordenar oito mil
+	// valores no caminho do desenho seria a medicao a comer-se a si propria.
+	const double agora = ofGetElapsedTimef();
+	if (agora < syncProx) return;
+	syncProx = agora + CHURN_PASSO_S;
+
+	const double custo = syncProbe.resumo(CvSyncProbe::agora());
+
+	char b[128];
+	::sprintf_s(b, sizeof(b), "custo da saida %.3f ms (%d canais, nth_element sobre ate %d amostras)",
+		custo, (int)CSYNC_N, CvSyncProbe::CAP);
+	cv0Log("sync", b);
+	cv0Log("sync", syncProbe.tickNota());
 }
 
 // =========================
@@ -1048,6 +1131,12 @@ void ofApp::draw() {
 	}
 
 	if (params.showOverlay) drawOverlay();
+
+	// O ultimo instante que ainda e nosso. O swap vem logo depois disto, dentro
+	// do GLFW, e com vsync ligado e ele a decidir quando estes pixels chegam de
+	// verdade ao monitor - por isso o `camara->tela` desta sonda e um intervalo
+	// e nao um ponto.
+	if (syncAtiva) syncProbe.drawFim(CvSyncProbe::agora());
 }
 
 // =========================
@@ -1243,6 +1332,15 @@ void ofApp::drawOverlay() {
 	// um nascimento e exatamente o que um pulso de nota e.
 	if (churnAtiva)
 		hudWrap(y, "  churn: ", churnNota, strlen(churnNota));
+
+	// A sincronia obedece a CV0_SYNC e nao calcula nada aqui: a sonda escreve a
+	// nota uma vez por janela e o HUD le o que ela deixou, pelo mesmo motivo
+	// pelo qual o churn usa uma nota em vez de ordenar amostras no caminho do
+	// pixel. Sem a variavel a linha nao existe e a coluna fica o que era.
+	if (syncAtiva) {
+		const char* sn = syncProbe.hudNota();
+		hudWrap(y, "  sync: ", sn, strlen(sn));
+	}
 
 	// ---------- coluna direita: a tabela e os comandos ----------
 	// O painel e desenhado a partir das mesmas linhas que as teclas usam. Ha

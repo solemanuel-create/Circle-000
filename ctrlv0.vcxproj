@@ -277,6 +277,7 @@
     <ClCompile Include="src\ofApp.cpp" />
     <ClCompile Include="src\paramTable.cpp" />
     <ClCompile Include="src\sourceTable.cpp" />
+    <ClCompile Include="src\syncProbe.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\audioEngine.h" />
@@ -293,6 +294,7 @@
     <ClInclude Include="src\ofApp.h" />
     <ClInclude Include="src\paramTable.h" />
     <ClInclude Include="src\sourceTable.h" />
+    <ClInclude Include="src\syncProbe.h" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="$(OF_ROOT)\libs\openFrameworksCompiled\project\vs\openframeworksLib.vcxproj">

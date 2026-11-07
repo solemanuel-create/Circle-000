@@ -15,6 +15,7 @@
 #include "audioProbe.h"
 #include "audioEngine.h"
 #include "midiProbe.h"
+#include "syncProbe.h"
 
 #include <atomic>
 #include <thread>
@@ -120,6 +121,17 @@ public:
 	// o stderr e para uma linha do HUD. Sem a variavel o `if` de cima nem a
 	// chama: nenhum campo do registo e lido, nenhum contador se move.
 	void churnDump();
+
+	// ----- sonda de sincronia (CV0_SYNC) -----
+	// Os tres relogios da peca somados uma vez por janela: camera->tela,
+	// camera->som e nascimento->nota. A sonda nao muda caminho nenhum; o que
+	// ela muda nesta casa e a ordem de uma decisao que hoje se tomava por
+	// adjetivo. O `syncDump` e o unico sitio onde os percentis sao calculados,
+	// e por isso nao esta no caminho do desenho.
+	CvSyncProbe syncProbe;
+	bool syncAtiva = false;
+	double syncProx = 0.0;
+	void syncDump();
 
 	// ----- camera -----
 	// O videoInput do openFrameworks morre ao abrir o dispositivo nesta

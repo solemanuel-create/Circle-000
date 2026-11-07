@@ -209,6 +209,8 @@ Outras variaveis de runtime, todas com a mesma regra de inercia:
 | `CV0_AUDIOENG` | **agente, nao sonda**: `off` ou `0` desliga o motor de sintetese por inteiro — nenhuma rota aberta, nenhuma amostra escrita, e o HUD diz `som: desligada por CV0_AUDIOENG` em vez de mentir com um `pico 0.0000`. Sem a variavel o motor abre com o exe, exactamente como o `midiOut` | `src/audioEngine.cpp` (`AudioEngine::setup`), chamado em `ofApp.cpp:137` |
 | `CV0_AUDIOENG_NIVEL` | teto da sala em **dBFS**, cortado a `-40..-6`; fora dessa faixa ou texto que nao e numero, fica o teto de palco (`-18`) e a linha de abertura diz qual ficou e porquê. O valor e a unica entrada do limiter, nao um ganho master | `src/audioEngine.cpp` (`setup`, antes da rota) |
 | `CV0_AUDIOENG_TEST` | **prova por fora, nao um modo de palco**: o valor e a duracao em segundos por cena (`1..4`, texto nao numerico cai em 1). Corre a mesma funcao que o motorista usa, sem dispositivo, e imprime a tabela das cenas mais o WAV do conjunto. Roda **antes** de qualquer tentativa de abrir rota, para os numeros sobreviverem a uma rota que derrube o processo | `src/audioEngine.cpp` (`setup` → `testeOffline`) |
+| `CV0_SYNC` | sonda de sincronia ponta a ponta: carimba o instante de cada frame de camara, do fim da publicacao, de cada callback do motorista, do nascimento de cada corpo (por id, nao por slot) e de cada nota, e de 5 em 5 s imprime seis canais com `n(+delta) fora min/med/p90/max` mais os compostos `cam->tela`, `cam->som`, `nasce->nota`. Nao muda um numero do comportamento | `src/syncProbe.{h,cpp}`, `ofApp::syncDump()` |
+| `CV0_SYNC_VSYNC` | **segunda variavel da mesma sonda**: `off`/`0`/`n`/`false` poe `ofSetVerticalSync(false)`, qualquer outra coisa ou ausencia poe `true`. So existe quando `CV0_SYNC` esta ligado, porque sem sonda armadas nao ha porque tocar na janela de quem nao pediu a medicao | `src/ofApp.cpp` (`setup`, bloco da sonda) |
 | `CV0_AUDIOENG_WAV` | despejo da saida **viva**: o valor e a duracao em segundos (`1..30`, cortado, e default 5). Reserva um buffer de `s x 48000 x 2` float numa unica alocacao no `setup()` — zero alocacao no caminho do motorista — e escreve `cv0_audio_eng_vivo.wav` na pasta do exe (PCM16, o que o motorista entregou, nao o que o motor sonhou) | `src/audioEngine.cpp` (`setup`, `Ctx::dump`) |
 
 O `CV0_BLOBMATCH` e o `CV0_BLOBAREA` nao sao sondas: mudam o comportamento. So
@@ -423,6 +425,70 @@ qualquer sonda de igualdade desta arvore:
   acusar. No P5 a formula sem o `&& texOk` acusou 24 de 128 linhas; sem essa
   linha o "0 divergencias" poderia significar simplesmente que a comparacao nao
   rodou.
+
+### A sonda de sincronia (`CV0_SYNC`)
+
+Medida em 2026-11-07 no `bin` de palco, em tres passes de ~38 s, com a webcam
+integrada em `MSMF #1` a 1280x720 (995 frames de fonte em ~35 s = 28,4/s) e o
+motor ASIO4ALL aberto a 48k/512/2 canais. Cada passe acabou pela tecla Escape do
+proprio openFrameworks (`ofMainLoop.cpp:265`, `escapeQuits` por omissao): nenhum
+processo foi morto para fechar uma corrida.
+
+| canal | vsync ON | vsync OFF | o que e |
+|---|---|---|---|
+| `cam->tela` med / p90 / max | 2,5 / 3,4 / 25,5 | 2,2 / 3,1 / 25,3 | do `read()` do frame ate ao fim do `draw` |
+| `swap` min / med / p90 / max | 1,2 / 6,2 / 65,2 / 82,7 | 1,2 / 6,4 / 65,2 / 81,8 | intervalo entre draws; a mediana e o arranque sem camera |
+| `cam->pub` med | 1,9 | 1,7 | do `read()` ate a publicacao dos centros |
+| `pub->bloco` med / p90 / max | 29,5 / 55,8 / 90,1 | 31,0 / 57,2 / 81,0 | da publicacao ate ao callback que a le |
+| COMPOSTO `cam->som` | 31,4 | 32,7 | `cam->pub` + `pub->bloco` |
+
+Tres coisas que so a medicao podia dizer:
+
+1. **O vsync nao e a alavanca, e o `swap min` e que o prova.** Com
+   `glfwSwapInterval(1)` *pedido*, o menor intervalo entre draws medido foi
+   **1,2 ms** -- nenhum ecran a 60 Hz, e sequer a 144, deixa passar um swap a
+   1,2 ms. ON e OFF coincidem a 0,2 ms na mediana e exatamente a 65,2 ms no p90.
+   A OF so expoe o setter (`ofAppRunner.h:107` -> `ofAppGLFWWindow.cpp:1662`) e
+   nao ha leitura de volta, por isso a linha da sonda escreve o **pedido** e a
+   distribuicao do `swap` e a prova de que ele nao bateu. Ficar com o vsync ON
+   nao custa nada medido; nao contar com ele e o que custa.
+2. **A entrega da camera vem em rajadas.** 995 draws em ~35 s dao 35 ms de media,
+   mas a distribuicao e bimodal: metade dos intervalos ~6 ms, 10% acima de 65 ms,
+   teto 82,7. Nao e o loop que flutua -- e o `MSMF` a soltar dois frames de uma
+   vez e depois a esperar. Para a reactividade isto e o numero a atacar, porque
+   e aqui que a imagem salta.
+3. **O maior numero do caminho do som nao esta no sintetizador, esta no
+   `pub->bloco`: mediana ~30 ms, cauda 90 ms.** A nota e publicada no fim do
+   `update()`, espera o resto do frame (~35 ms) e depois ate ao callback de
+   10,7 ms. O motor em si custa 0,076 ms dentro do callback e o `underflow` foi
+   sempre 0.
+
+Limites declarados pela propria sonda: `cam->tela` comeca no `read()`, portanto a
+idade do frame dentro do driver e do USB antes de o ler **nao entra** no numero,
+e e justamente a fatia que falta ao orcamento de 120 ms; e `nasce->nota` so tem
+valor quando ha gente em cena.
+
+Do `nasce->nota`: uma amostra no ON (75,6 ms) e zero no OFF, porque nas duas
+corridas nenhum corpo chegou aos 3 frames de vida -- a sala estava vazia. Na
+passagem de 14 s com a mesma fonte e movimento em cena o canal deu 18
+nascimentos: `min 69,6 med 75,8 p90 116,7 max 201,9`, decomposto em 64,2 ms dos
+3 frames de vida e 11,6 ms de transporte. Este e o unico dos tres compostos que
+precisa de um corpo e por isso pertence a um ensaio, nao a um script.
+
+O controlo negativo fechou a conta do custo: sem `CV0_SYNC` nao ha **uma** linha
+`[sync]` nos 30 de stderr, os callbacks do motor sao os mesmos tres nos tres
+passes (3680 / 3686 / 3687 em ~35 s, `ceifados 0`, `underflow 0`) e a saida da
+sonda custa 0,02 a 0,07 ms por janela de 5 s.
+
+Receita do harness, porque a camera e o recurso que trava primeiro: lancar
+corridas seguidas sem descanso faz o `MSMF` recusar o streaming
+(`OnReadSample() error -1072873854`) e o app cai para `DSHOW #1`, que nesta
+maquina entrega ~0,8 fps -- a 1 frame por segundo nenhum corpo chega a idade 3,
+o `nasce->nota` fica vazio e os restantes canais medem uma coisa que nao e a
+peca. Ja tinha sido medido em 2026-11-05 e passa sozinho em ~10 min. O
+`cv0_p60_run.ps1` (em `%TEMP%`) po por isso uma porta de saude: so mede quando a
+linha `[fonte]` diz `MSMF`, descansa 45 s entre tentativas e espera 9 min antes
+da primeira.
 
 ## 9. Armadilhas ja pagas, listadas para quem chegar depois
 

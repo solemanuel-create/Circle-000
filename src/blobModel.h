@@ -193,6 +193,18 @@ public:
 	void setMatch(float largura) { match_ = largura; }
 	float match() const { return match_; }
 
+	// ----- sonda de sincronia (CV0_SYNC) -----
+	// O instante em que este frame foi recebido, no relogio da sonda. Passar um
+	// valor > 0 e armar; passar 0 (ou nunca passar nada) e o desarmado, e neste
+	// caminho nenhum dos campos abaixo e escrito e nenhuma idade e carimbada.
+	//
+	// O que se guarda nao e o slot e sim o ID: um corpo nasce num frame e so da
+	// nota tres frames depois, e nesses tres frames a ordem por area mudou e o
+	// slot zero e outro corpo. Carimbar o slot seria medir o nascimento de um e
+	// a nota de outro.
+	void setSyncFrameUs(long long us) { syncUs_ = us; }
+	long long bornUsAt(int i) const;
+
 	// o que vai para o uniform uBlobs: um vec4 por slot, na ordem dos slots.
 	// Ninguem mais faz contas de i * 4 nem aponta para dentro de um vector.
 	const float* upload() const { return &boxes_[0].x0; }
@@ -234,6 +246,7 @@ private:
 	ofRectangle srcs_[CV_MAX_BLOBS];
 	int ids_[CV_MAX_BLOBS];
 	int ages_[CV_MAX_BLOBS];
+	long long bornUs_[CV_MAX_BLOBS];
 	int n_;
 
 	// do frame anterior so interessa o que serve para casar: centro, id e idade
@@ -241,8 +254,12 @@ private:
 	float pcy_[CV_MAX_BLOBS];
 	int pids_[CV_MAX_BLOBS];
 	int page_[CV_MAX_BLOBS];
+	long long pbornUs_[CV_MAX_BLOBS];
 	bool taken_[CV_MAX_BLOBS];
 	int pn_;
+
+	// o carimbo do frame em curso, posto pela sonda; <= 0 e desarmado
+	long long syncUs_;
 
 	int nextId_;
 	int matched_;

@@ -42,6 +42,10 @@ BlobRegistry::BlobRegistry() {
 	// corrida de tres limiares nao pode perder a condicao que esta a medir a
 	// meio, quando alguem carrega em r
 	match_ = CV_BLOB_MATCH_PADRAO;
+
+	// o carimbo do frame so existe se alguem o der: zero e o desarmado, e nem
+	// push nem endFrame tocam em bornUs_ enquanto ele la estiver
+	syncUs_ = 0;
 }
 
 // =========================
@@ -57,6 +61,8 @@ void BlobRegistry::reset() {
 	std::memset(pids_, 0, sizeof(pids_));
 	std::memset(page_, 0, sizeof(page_));
 	std::memset(taken_, 0, sizeof(taken_));
+	std::memset(bornUs_, 0, sizeof(bornUs_));
+	std::memset(pbornUs_, 0, sizeof(pbornUs_));
 	for (int i = 0; i < CV_MAX_BLOBS; i++) srcs_[i] = ofRectangle();
 
 	n_ = 0;
@@ -304,6 +310,24 @@ int BlobRegistry::push(const CvBlobBox& box, const ofRectangle& src, int idHint)
 	srcs_[i] = src;
 	ids_[i] = id;
 	ages_[i] = age;
+
+	// O nascimento e uma propriedade do ID, nao do slot: este corpo pode sair
+	// amanha no slot zero e depois no slot sete, e a nota que lhe bater aos
+	// tres frames tem de levar a hora a que ele apareceu, nao a hora a que o
+	// slot foi escrito. Desarmado (syncUs_ <= 0) nada aqui acontece.
+	if (syncUs_ > 0) {
+		long long b = syncUs_;
+		if (age > 0) {
+			b = 0;
+			for (int j = 0; j < pn_; j++) {
+				if (pids_[j] == id) { b = pbornUs_[j]; break; }
+			}
+			// um id com idade que nao estava publicado e o casamento forcado do
+			// sintetico depois de um reseed: para a sonda este e o frame zero
+			if (b <= 0) b = syncUs_;
+		}
+		bornUs_[i] = b;
+	}
 	return i;
 }
 
@@ -318,6 +342,9 @@ void BlobRegistry::endFrame() {
 		pcy_[i] = 0.5f * (boxes_[i].y0 + boxes_[i].y1);
 		pids_[i] = ids_[i];
 		page_[i] = ages_[i];
+		// o carimbo do nascimento acompanha o id, nao o slot: e o id que o frame
+		// seguinte vai encontrar, e a nota sai tres frames depois do carimbo
+		if (syncUs_ > 0) pbornUs_[i] = bornUs_[i];
 	}
 
 	// o frame so fecha para a sonda depois de os centros estarem publicados:
@@ -339,6 +366,15 @@ const CvBlobBox& BlobRegistry::boxAt(int i) const { return boxes_[i]; }
 const ofRectangle& BlobRegistry::srcAt(int i) const { return srcs_[i]; }
 int BlobRegistry::idAt(int i) const { return ids_[i]; }
 int BlobRegistry::ageAt(int i) const { return ages_[i]; }
+
+// =========================
+long long BlobRegistry::bornUsAt(int i) const {
+
+	// fora dos slots lidos nao ha idade nenhuma: zero e o valor que a sonda le
+	// como "desarmada", e um indice invalido nao pode inventar um nascimento
+	if (i < 0 || i >= n_) return 0;
+	return bornUs_[i];
+}
 
 // =========================
 int BlobRegistry::verifyFrag(const std::string& fragText, std::string& note) {

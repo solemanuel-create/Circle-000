@@ -7,6 +7,11 @@
 #include <memory>
 #include <string>
 
+// Cabecalho trocado por apontador opaco: o motor de sintese nao precisa de
+// saber o que uma sonda de sincronia e, e o que a sonda mede nao pode depender
+// de o motor ter aberto ou nao.
+class CvSyncProbe;
+
 // ==================== motor de sintese (pacote 5, passo 3) ====================
 // O teste de emissao respondeu, por ouvido dele em 2026-11-06, a pergunta que
 // nenhuma medicao responde: sai som da caixa desta maquina. Sai - por ASIO4ALL,
@@ -169,6 +174,13 @@ public:
 	// directo no ganho e sim o alvo da rampa.
 	void toggle() { activo_.store(!activo_.load()); }
 
+	// Sonda de sincronia (CV0_SYNC): apontar-lhe com uma sonda e o unico modo
+	// de o callback do motorista ter com que carimbar o instante em que leu o
+	// que a main publicou. Com null - o estado de sempre, e o estado sem a
+	// variavel - nenhuma linha dos canais e escrita e o Evento leva nasceUs
+	// zero, que a sonda le como desarmada.
+	void setSyncProbe(CvSyncProbe* s);
+
 	bool activo() const { return activo_.load(); }
 	bool abriu() const { return abriu_; }
 
@@ -215,6 +227,11 @@ private:
 	double custoMs_ = 0.0;
 
 	std::atomic<bool> activo_{ true };
+
+	// a sonda apontada por fora, nula enquanto ninguem a armou. Vive no objeto
+	// e copiada para o Ctx no setup, porque o Ctx nasce la e o motorista so
+	// conhece o Ctx.
+	CvSyncProbe* sync_ = nullptr;
 
 	// o relogio da proxima impressao e a fotografia anterior dos contadores. A
 	// janela e medida, nao assumida: `tickT0_` e a hora da linha anterior e e a
