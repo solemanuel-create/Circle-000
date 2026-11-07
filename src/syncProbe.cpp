@@ -31,7 +31,7 @@ namespace {
 
 	const char* NOME[CSYNC_N] = {
 		"cam->tela", "swap", "cam->pub", "pub->bloco", "nasce->nota", "nasce->pub",
-		"driver->idade"
+		"driver->idade", "pub->nota"
 	};
 }
 
@@ -208,6 +208,13 @@ void CvSyncProbe::nota(long long nasceUs, long long t) {
 }
 
 // =========================
+void CvSyncProbe::transporte(long long pubUs, long long t) {
+
+	if (!ativo_ || pubUs <= 0) return;
+	anel_[CSYNC_PUB_NOTA].escreve(t - pubUs);
+}
+
+// =========================
 void CvSyncProbe::notaPublicada(long long nasceUs, long long t) {
 
 	if (!ativo_ || nasceUs <= 0) return;
@@ -310,10 +317,40 @@ double CvSyncProbe::resumo(long long agoraJanela) {
 		if (w > 0 && (size_t)w < left) { p += w; left -= (size_t)w; }
 	}
 
+	// Os dois numeros que uma janela sem notas nao pode inventar. E a licao do
+	// passo 60 a ser aplicada a si propria: naquela corrida a linha saiu com
+	// `transporte=-23.4`, que e a subtracao da mediana de um canal vazio (zero)
+	// pelo gatilho, e um numero negativo numa cadeia de latencias nao e uma
+	// latencia pequena - e a ausencia a fazer-se passar por medida.
+	//
+	// A outra mentira da mesma decomposicao era menos visivel e o oitavo canal
+	// tratou dela: o `gatilho` era `3 x swap`, ou seja o periodo do LOOP
+	// multiplicado pela idade do pulso, quando nada nele e o tempo que um corpo
+	// leva a nascer ate virar Evento. Numa corrida com gente em cena o swap deu
+	// mediana 31,4 ms por causa das rajadas, e 3x31,4 = 94,2 contra um
+	// nasce->nota inteiro de 75,9: a estimativa comia o transporte todo e ainda
+	// sobrava. Com nasce->pub e pub->nota medidos, os dois trocos dao-se um por
+	// um e a soma bate certo com o canal de ponta a ponta. O 3xswap continua na
+	// linha, com o nome que tem: estimativa do passo 60, para se poder medir o
+	// erro dela.
+	char decomp[192];
+	if (est_[CSYNC_NASCE_PUB].n > 0 && est_[CSYNC_PUB_NOTA].n > 0) {
+		const double g = est_[CSYNC_NASCE_PUB].med;
+		const double tr = est_[CSYNC_PUB_NOTA].med;
+		snprintf(decomp, sizeof(decomp),
+			"gatilho %.1f (nasce->pub, medido) + transporte %.1f (pub->nota, medido, p90 %.1f max %.1f) = %.1f vs nasce->nota %.1f | passo 60 estimava %dxswap=%.1f",
+			g, tr, est_[CSYNC_PUB_NOTA].p90, est_[CSYNC_PUB_NOTA].max, g + tr,
+			notaMed, idadePulso_, gat);
+	} else {
+		snprintf(decomp, sizeof(decomp),
+			"n/a: nenhuma nota drenada nesta corrida, logo gatilho e transporte nao tem o que separar | passo 60 estimava %dxswap=%.1f",
+			idadePulso_, gat);
+	}
+
 	w = snprintf(p, left,
-		" | COMPOSTO cam->tela %.1f..%.1f | +idade driver <= %.1f (p90 %.1f) => camera real->tela <= %.1f..%.1f | cam->som %.1f(+saida do driver) | nasce->nota %.1f | dos quais gatilho %dxswap=%.1f e transporte=%.1f | soma das medianas, nao a mediana da soma",
+		" | COMPOSTO cam->tela %.1f..%.1f | +idade driver <= %.1f (p90 %.1f) => camera real->tela <= %.1f..%.1f | cam->som dos escalares %.1f(+saida do driver) | nasce->nota %.1f | decomposto: %s | soma das medianas, nao a mediana da soma",
 		telaInf, telaSup, idadeMed, idadeP90, realInf, realSup,
-		somMeio, notaMed, idadePulso_, gat, notaMed - gat);
+		somMeio, notaMed, decomp);
 	if (w > 0 && (size_t)w < left) { p += w; left -= (size_t)w; }
 
 	// as duas acusacoes da sonda: uma janela sem amostras num canal nao e um
@@ -341,14 +378,29 @@ double CvSyncProbe::resumo(long long agoraJanela) {
 		snprintf(p, left, " | AVISO: driver->idade sem amostras: a fonte nao e cv::VideoCapture (NuiApi nao tem fila de backend) e o limite do driver nao foi medido");
 
 	// a linha do HUD e o resumo dos resumos: o que ele precisa de ver ao centro
-	// da sala sao os tres numeros, nao os seis canais. O `fps` e o inverso do
+	// da sala sao os tres numeros, nao os oito canais. O `fps` e o inverso do
 	// periodo de troca medido, e e a unica forma de dizer se foi o vsync ou a
-	// camera a mandar no ritmo da janela.
+	// camera a mandar no ritmo da janela. O `som` passou a dizer `escalares`
+	// porque o passo 62 mostrou que esse e o unico outro nome que ele pode ter.
 	const double notaP90 = est_[CSYNC_NASCE_CB].p90;
 	const double fps = est_[CSYNC_SWAP].med > 0.0 ? 1000.0 / est_[CSYNC_SWAP].med : 0.0;
+	char anel[16];
+	if (est_[CSYNC_PUB_NOTA].n > 0)
+		snprintf(anel, sizeof(anel), "%.1f", est_[CSYNC_PUB_NOTA].med);
+	else
+		snprintf(anel, sizeof(anel), "n/a");
+
+	// A sala vazia prova a mesma armadilha que o `anel`: sem nota drenada o canal
+	// nao vale zero milisegundos, vale "nao aconteceu". No log a acusacao ja
+	// existia; no HUD nao existia e o `0..0` mentia a quem olha para o ecra.
+	char notaHud[24];
+	if (est_[CSYNC_NASCE_CB].n > 0)
+		snprintf(notaHud, sizeof(notaHud), "%.0f..%.0f", notaMed, notaP90);
+	else
+		snprintf(notaHud, sizeof(notaHud), "n/a");
 	snprintf(hud_, sizeof(hud_),
-		"cam->tela %.0f..%.0f ms | id<=%.0f | cam->som %.0f ms | nasce->nota %.0f..%.0f ms | swap %.1f (%.1f fps) | cb %ld/%ld | vsync %s",
-		telaInf, telaSup, idadeMed, somMeio, notaMed, notaP90,
+		"cam->tela %.0f..%.0f ms | id<=%.0f | escalares %.0f ms | nasce->nota %s ms | anel %s | swap %.1f (%.1f fps) | cb %ld/%ld | vsync %s",
+		telaInf, telaSup, idadeMed, somMeio, notaHud, anel,
 		est_[CSYNC_SWAP].med, fps,
 		est_[CSYNC_PUB_CB].n, nFonte_, vsync_ ? "ON" : "OFF");
 

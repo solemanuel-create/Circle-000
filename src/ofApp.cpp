@@ -5,6 +5,7 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 namespace {
 	const double STALL_SECONDS = 1.5;
@@ -394,7 +395,39 @@ bool ofApp::openIndex(int idx, int api) {
 		cv::CAP_PROP_FPS, params.camFps
 	};
 
-	if (!cap.open(idx, api, req)) return false;
+	// MELHORIA FASE 1: Retry com exponential backoff se for DSHOW
+	const int MAX_RETRIES = 3;
+	const int RETRY_DELAY_MS = 100;
+	bool fallbackToMsmf = false;
+
+	for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+		if (cap.open(idx, api, req)) {
+			if (attempt > 0) {
+				cv0Log("dshow_retry", 
+					"sucesso em tentativa " + std::to_string(attempt + 1) + "/" + std::to_string(MAX_RETRIES));
+			}
+			break;
+		}
+
+		if (attempt < MAX_RETRIES - 1) {
+			int delayMs = RETRY_DELAY_MS * (1 << attempt);  // exponential: 100, 200, 400
+			cv0Log("dshow_retry", 
+				"tentativa " + std::to_string(attempt + 1) + " falhou, aguardando " + 
+				std::to_string(delayMs) + "ms...");
+			std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+		} else if (api == cv::CAP_DSHOW) {
+			// Última tentativa falhou e é DSHOW: fallback para MSMF
+			fallbackToMsmf = true;
+			cv0Log("dshow_retry", "fallback para MSMF após 3 tentativas de DSHOW");
+			if (!cap.open(idx, cv::CAP_MSMF, req)) {
+				if (!cap.open(idx, cv::CAP_MSMF)) {
+					return false;  // MSMF também falhou
+				}
+			}
+		}
+	}
+
+	if (!cap.isOpened()) return false;
 
 	// buffersize 1 e o que segura a latencia abaixo dos 120 ms do palco
 	cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
@@ -625,7 +658,40 @@ void ofApp::update() {
 
 		int kFlags = 0;
 		if (kinectOk) kFlags = kinect.grab(kColor, kDepth);
-		else frameNew = cap.read(mFrame) && !mFrame.empty();
+		else {
+			frameNew = cap.read(mFrame) && !mFrame.empty();
+
+			// MELHORIA FASE 1: Validacao de frame - deteccao de glitch
+			if (frameNew) {
+				// Calcula hash simples para detectar frames travados/duplicados
+				static uint64_t lastFrameHash = 0;
+				static int stuckFrameCount = 0;
+
+				uint64_t frameHash = 0;
+				if (mFrame.rows > 0 && mFrame.cols > 0) {
+					// Amostra 4 cantos do frame para hash rápido
+					const int step = 4;
+					const uchar* p = mFrame.ptr<uchar>(0);
+					frameHash ^= (uint64_t)p[0];
+					p = mFrame.ptr<uchar>(mFrame.rows - 1);
+					frameHash ^= (uint64_t)p[mFrame.cols - 1] << 16;
+					p = mFrame.ptr<uchar>(mFrame.rows / 2);
+					frameHash ^= (uint64_t)p[mFrame.cols / 2] << 32;
+				}
+
+				if (frameHash == lastFrameHash && lastFrameHash != 0) {
+					stuckFrameCount++;
+					if (stuckFrameCount > 5) {  // 5 frames iguais = problema
+						cv0Log("frame_validation", 
+							"frame travado detectado: " + std::to_string(stuckFrameCount) + " frames iguais");
+						frameNew = false;  // rejeita este frame
+					}
+				} else {
+					stuckFrameCount = 0;
+					lastFrameHash = frameHash;
+				}
+			}
+		}
 
 		const long long c1 = syncAtiva ? CvSyncProbe::agora() : 0;
 

@@ -123,11 +123,19 @@ namespace {
 	// dentro do Evento para a thread do motorista poder subtrair-lhe a propria
 	// hora. Sem a sonda armada fica zero, e zero e o valor que a sonda le como
 	// "desarmada" - o anel nao e tocado, o sintetizador nem olha para ele.
+	//
+	// O `pubUs` e o mesmo truque para a outra parte do caminho: o instante em
+	// que este Evento entrou no anel. Com ele o motorista pode medir a espera
+	// propria da fila, que e uma coisa diferente da idade dos escalares que o
+	// `pub->bloco` mede - e a diferenca entre as duas e precisamente o numero
+	// que faltava para saber quanto do atraso do som e nosso e quanto e do
+	// ritmo da camera.
 	struct Evento {
 		unsigned char nota = 60;
 		unsigned char vel = 100;
 		unsigned char pan = 128;
 		long long nasceUs = 0;
+		long long pubUs = 0;
 	};
 
 	struct Pulso {
@@ -869,7 +877,10 @@ int engCallback(void* out, void* in, unsigned nFrames, double streamTime,
 	if (c->sync) {
 		const long long ts = CvSyncProbe::de(t0);
 		c->sync->cbFim(ts);
-		for (int i = 0; i < nEv; i++) c->sync->nota(ev[i].nasceUs, ts);
+		for (int i = 0; i < nEv; i++) {
+			c->sync->nota(ev[i].nasceUs, ts);
+			c->sync->transporte(ev[i].pubUs, ts);
+		}
 	}
 
 	sintetiza(static_cast<float*>(out), nFrames, c->canais, (double)c->taxa,
@@ -1129,11 +1140,17 @@ void AudioEngine::publish(const CvSignals& sig, float master, const BlobRegistry
 
 		// o carimbo do nascimento segue com a nota, e o que permite ao motorista
 		// dizer "deste corpo ao som que dele saiu vao X ms" sem que a main e ele
-		// tenham de concordar em mais nada. Sem sonda, nasceUs fica zero e o
-		// Evento e byte a byte o que sempre foi nos tres campos que ele le.
+		// tenham de concordar em mais nada. O carimbo da publicacao segue no
+		// mesmo instante e pela mesma moeda, e da a parte que falta: quanto
+		// esperou este Evento num anel que o motorista drena todo em cada bloco.
+		// Sem sonda os dois ficam zero, que e o valor que a sonda le como
+		// "desarmada", e o Evento e byte a byte o que sempre foi nos tres campos
+		// que ele le.
 		if (c.sync) {
+			const long long tpub = CvSyncProbe::agora();
 			e.nasceUs = blobs.bornUsAt(i);
-			c.sync->notaPublicada(e.nasceUs, CvSyncProbe::agora());
+			e.pubUs = tpub;
+			c.sync->notaPublicada(e.nasceUs, tpub);
 		}
 
 		// o anel e de um produtor e um consumidor, por isso o espaco vazio e

@@ -457,11 +457,13 @@ Tres coisas que so a medicao podia dizer:
    teto 82,7. Nao e o loop que flutua -- e o `MSMF` a soltar dois frames de uma
    vez e depois a esperar. Para a reactividade isto e o numero a atacar, porque
    e aqui que a imagem salta.
-3. **O maior numero do caminho do som nao esta no sintetizador, esta no
-   `pub->bloco`: mediana ~30 ms, cauda 90 ms.** A nota e publicada no fim do
-   `update()`, espera o resto do frame (~35 ms) e depois ate ao callback de
-   10,7 ms. O motor em si custa 0,076 ms dentro do callback e o `underflow` foi
-   sempre 0.
+3. **O maior numero do caminho do som nao esta no sintetizador, e nao era a
+   espera da nota.** `pub->bloco` da mediana ~30 ms e cauda 90 ms, e ate ao
+   passo 62 chamava-se-lhe o tempo que a nota espera no anel. O que ele mede e
+   a idade dos ESCALARES - energia, brilho, ganho - no instante em que cada
+   bloco os le. A espera de uma nota concreta passou a oitavo canal e deu
+   **6,7 ms** com teto de um bloco. Ver "O oitavo canal", abaixo. O motor em si
+   custa 0,076 ms dentro do callback e o `underflow` foi sempre 0.
 
 Limites declarados pela propria sonda: `cam->tela` comeca no `read()`, portanto a
 idade do frame dentro do driver e do USB antes de o ler **nao entra** no numero,
@@ -470,12 +472,15 @@ valor quando ha gente em cena. A primeira destas duas cotas tem casa propria
 desde o passo 61, no sub-capitulo seguinte; a segunda continua a pertencer a um
 ensaio.
 
-Do `nasce->nota`: uma amostra no ON (75,6 ms) e zero no OFF, porque nas duas
-corridas nenhum corpo chegou aos 3 frames de vida -- a sala estava vazia. Na
-passagem de 14 s com a mesma fonte e movimento em cena o canal deu 18
-nascimentos: `min 69,6 med 75,8 p90 116,7 max 201,9`, decomposto em 64,2 ms dos
-3 frames de vida e 11,6 ms de transporte. Este e o unico dos tres compostos que
-precisa de um corpo e por isso pertence a um ensaio, nao a um script.
+Do `nasce->nota`: na corrida de 35 s com que o passo 60 foi fechado o canal nao
+deu uma amostra valida em nenhum dos lados, porque nenhum corpo chegou aos 3
+frames de vida -- a sala estava vazia. Na passagem de 14 s com a mesma fonte e
+movimento em cena deu 18 nascimentos: `min 69,6 med 75,8 p90 116,7 max 201,9`. E
+na corrida do passo 62, com gente a mexer-se em frente a webcam, deu 35 notas
+com o gatilho e o transporte medidos um por um (tabela acima). Continua a ser o
+unico dos tres compostos que precisa de corpo, e por isso o ensaio com uma pessoa
+a sério (passo 63) ainda esta em dívida: o que falta nao e o canal ter amostras,
+e saber quantas delas existem com um dançarino a mover-se de caso pensado.
 
 O controlo negativo fechou a conta do custo: sem `CV0_SYNC` nao ha **uma** linha
 `[sync]` nos 30 de stderr, os callbacks do motor sao os mesmos tres nos tres
@@ -490,7 +495,11 @@ o `nasce->nota` fica vazio e os restantes canais medem uma coisa que nao e a
 peca. Ja tinha sido medido em 2026-11-05 e passa sozinho em ~10 min. O
 `cv0_p60_run.ps1` (em `%TEMP%`) po por isso uma porta de saude: so mede quando a
 linha `[fonte]` diz `MSMF`, descansa 45 s entre tentativas e espera 9 min antes
-da primeira.
+da primeira. O `cv0_p62_run.ps1` e o `cv0_p62b_run.ps1` herdaram a mesma porta
+sem espera inicial, porque a camera ja tinha descansado entre as corridas, e o
+`cv0_p62_offline.ps1` corre a tabela com a fonte NDI para nao tocar de todo na
+integrada. Todos os scripts do passo, o backup do `bin` anterior e os stderr de
+cada passe ficaram em `%TEMP%` com o prefixo `cv0_p62`.
 
 ### O setimo canal (`driver->idade`) e o carimbo que nao existe
 
@@ -562,12 +571,82 @@ armada janela a janela (470 e 469 nos ultimos 5,00 s nas duas; relogio acumulado
 armada a saida passou a custar 0,046 a 0,147 ms por janela, porque sao sete
 canais a ordenar em vez de seis.
 
-Armadilha de leitura deixada a descoberto por esta corrida, e ainda nao
-remendada porque mudar a linha e muda-la tambem na passagem anterior: quando
-`nasce->nota` nao tem amostras, a composta escreve `med 0.0` e o `transporte`
-sai negativo (`0 - 3xswap` = `-23,4`). O AVISO de "nenhuma nota saiu pelo
-motorista" esta na mesma linha, mas um numero negativo a pedir ao leitor que o
-some nao e uma ausencia dita em voz alta.
+Armadilha de leitura deixada a descoberto por esta corrida, e remendada no
+passo 62: quando `nasce->nota` nao tem amostras, a composta escrevia `med 0.0`
+e o `transporte` saia negativo (`0 - 3xswap` = `-23,4`). O AVISO de "nenhuma
+nota saiu pelo motorista" estava na mesma linha, mas um numero negativo a pedir
+ao leitor que o some nao e uma ausencia dita em voz alta. Hoje a decomposicao
+toda sai como `n/a` quando nao ha notas drenadas.
+
+### O oitavo canal (`pub->nota`) e os dois numeros que partilhavam um nome
+
+O passo 62 foi autorizado como "cortar os ~30 ms de `pub->bloco`". Antes de
+cortar seja o que foi foi-se ver o que esse canal mede, e a resposta nao e a que
+o nome prometie:
+
+| canal | o que escreve | o que responde | onde bate |
+|---|---|---|---|
+| `pub->bloco` (passo 60) | TODOS os callbacks, contra a ULTIMA publicacao | com que idade estao os doze escalares quando o bloco os le | o ritmo a que a main publica, que e o ritmo dos frames da camera |
+| `pub->nota` (passo 62) | so os Eventos que sairam do anel, cada um com o seu carimbo | quanto esperou ESTA nota na fila | um bloco (10,7 ms) mais o agendamento da thread do motorista |
+
+Nao e o mesmo numero por uma razao de estrutura: o anel dos eventos e drenado
+todo em cada callback, mas os atomicos do envelope sao lidos seja qual for o
+ultimo valor que passou pela main. Uma sala sem gente enche `pub->bloco` na
+mesma e deixa `pub->nota` sem uma amostra; uma fonte agarrada leva o primeiro ao
+teto da escala enquanto o segundo continua vazio. Foi exactamente isso que a
+primeira corrida deste passo mostrou, sem ser procurado: com a fonte NDI
+virtual da maquina (`NDI Webcam Video 1 | MSMF #2`, que entrega 3 frames em 30 s
+e depois da `can't grab frame. Error: -2147483638` a cada 10 s), o `pub->bloco`
+deu mediana **3263 ms** com `fora 1294` e o `pub->nota` deu `n=0`. Os dois
+canais nao podem ser a mesma coisa nenhuma.
+
+Como foi feito: o `Evento` passou a levar `pubUs`, posto no mesmo
+`CvSyncProbe::agora()` que carimba o nascimento, e o motorista subtrai-lhe o
+instante de entrada no callback. Sem sonda armada os dois carimbos ficam zero,
+o `Evento` e byte a byte o que sempre foi nos tres campos que o sintetizador le,
+e a prova disso e a tabela offline: as 13 linhas `TESTE` sairam **identicas** ao
+`cv0_audioeng_teste.err` de 2026-11-06 -- `571392 quadros`, pico do ficheiro
+`0.1258`, `ceifados na copia 0`, e nenhuma das medianas, saltos ou `fora do
+teto` das 12 cenas mudou um digito. O que mudou na diff foi so o caminho do WAV.
+
+Medido numa corrida de webcam de 35 s, MSMF #1 a 30 fps, com movimento em frente
+a camera e 35 notas a sair pelo motorista:
+
+| troco | min | med | p90 | max |
+|---|---|---|---|---|
+| nasce->pub = gatilho (3 frames de vida) | 62,2 | 68,4 | 84,8 | 133,2 |
+| pub->nota = transporte (espera no anel) | 1,0 | **6,7** | 8,7 | 10,0 |
+| nasce->nota = ponta a ponta | 64,4 | 75,9 | 92,3 | 140,5 |
+
+68,4 + 6,7 = 75,1 contra 75,9 medidos de ponta a ponta: os ~0,8 ms de diferenca
+sao o enfileirar em si, e a conta fecha sem nenhuma pata inventada. Foi assim
+que se viu que a decomposicao do passo 60 estava errada para cima por 25 ms: ela
+estimava o gatilho como `3 x swap`, e uma corrida com cena da swap com mediana
+31,4 ms (sao as rajadas do backend), logo `3x31,4 = 94,2` para um gatilho que
+mede 68,4 -- e o resto, chamado transporte, saia `-18,3`. A linha agora escreve
+os dois medidos e mantem a estimativa antiga ao lado, com o nome de estimativa.
+
+**O que sobra para cortar, e a quem pertence decidir.** Refeita a conta, os 30
+ms nao eram espera de nota, e nao ha 30 ms a cortar no transporte: ele ja vale
+6,7 ms com teto de um bloco. Ficam tres alavancas, e as tres tem preco:
+
+1. `buffer 512 -> 256` no ASIO4ALL corta metade da espera do anel (~3,4 ms) e
+   estreita sobretudo a cota que o driver poe depois do callback, que e a parte
+   do `cam->som` ainda nao medida e declarada desde o passo 60. Preco: margem de
+   xrun numa Realtek partilhada, e em palco um xrun ouve-se. Decisao dele.
+2. Os 68,4 ms de gatilho sao os tres frames de vida que a curva de sobrevivencia
+   escolheu (N=8 custava 267 ms de atraso e N=1 devolvia os nascimentos falsos
+   que o debounce veio matar). Baixar para N=2 corta ~23 ms e volta a aceitar
+   mais corpos que se fragmentaram. Decisao dele.
+3. A idade dos escalares (~30 ms, cauda 90) so se corta se o bloco deixar de
+   ler o ultimo valor publicado a saltos e passar a interpolar ate ele -- que e
+   mexer no som, nao na fiao. Decisao dele, e estetica.
+
+O custo da propria saida subiu com o oitavo canal: 0,020 a 0,144 ms por janela
+(de 8 canais a ordenar em vez de 7), e o controle negativo manteve-se limpo --
+sem `CV0_SYNC` a passe nao emite uma linha `[sync]` e os callbacks do motor
+batem certo com a corrida armada (938 nos ultimos 10 s nas duas, `dentro do
+callback` 0,077 ms nas duas, `underflow 0`).
 
 ## 9. Armadilhas ja pagas, listadas para quem chegar depois
 
@@ -619,3 +698,13 @@ some nao e uma ausencia dita em voz alta.
   Pedir por indice nao da erro, da outra propriedade: 30 e `ISO_SPEED`, 29 e
   `GUID`. A idade do pixel dentro do backend passou a sair como **limite**
   deduzido do ciclo de entrega, no setimo canal do `CV0_SYNC`.
+- `CV0_SRC=ndi` **nao e um teste sem camera**. Nesta maquina existe uma fonte
+  virtual chamada `NDI Webcam Video 1`, e ela abre pelo MSMF como qualquer
+  captura: a passe de 30 s levou **3 frames** e o backend emitiu
+  `CvCapture_MSMF::grabFrame videoio(MSMF): can't grab frame. Error: -2147483638`
+  a cada ~10 s. O efeito colateral e uma corrida que parece morta e e so uma
+  fonte a ~0,1 Hz; o `pub->bloco` dela deu mediana **3263 ms** com `fora 1294`,
+  enquanto o `pub->nota` ficou com `n = 0` porque nenhuma nota chegou ao anel.
+  Para uma corrida sem fonte nao ha atalho por variavel de ambiente: a fonte
+  tem de falhar mesmo, ou entao usar a webcam com a sala vazia, que e o que o
+  controle negativo do passo 62 fez.

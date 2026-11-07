@@ -38,6 +38,19 @@
 //   NASCE_CB  nascimento do corpo         bloco que o toca     motorista
 //   NASCE_PUB nascimento do corpo         publicacao da nota   main
 //   IDADE     inicio do ciclo de entrega  entrega deste frame  main
+//   PUB_NOTA  publicacao deste Evento     bloco que o drena    motorista
+//
+// PUB_CB e PUB_NOTA dao nomes a duas coisas diferentes e e por isso que as duas
+// existem. O PUB_CB e escrito em TODOS os callbacks contra a ULTIMA publicacao,
+// e responde "com que idade estavam os numeros quando este bloco os leu" - que
+// e o que manda no envelope, no ganho e no brilho, porque esses sobem pelos
+// atomicos. O PUB_NOTA so e escrito pelos eventos que sairam do anel, e
+// responde "quanto tempo este Evento esperou na fila" - que e o que
+// manda no ataque de uma nota. O primeiro e grande porque a main publica a
+// ritmo de frame em rajadas e o motorista pergunta a grid de 10,7 ms; o segundo
+// nao pode passar de um bloco, porque o anel e drenado todo em cada callback.
+// Confundi-los era o erro que a linha `cam->som 31 ms` escondia: os 31 ms sao a
+// idade dos ESCALARES, nao a espera das notas.
 //
 // Os tres pedidos sao compostos por cima destes:
 //
@@ -45,17 +58,24 @@
 //                    e CAM_TELA + SWAP (limite SUPERIOR: o buffer seguinte e o
 //                    que vai para o monitor). Entre os dois nao ha um numero,
 //                    ha um intervalo, e la-lo como ponto seria inventar.
-//   camara->som    = CAM_PUB + PUB_CB + o que o driver poe depois do callback
-//                    (esse ultimo nao e nosso nem medido daqui: uma janela de
-//                    saida ASIO4ALL sobre o endpoint nao e legivel sem
-//                    perguntar ao proprio driver, e o buffer fica declarado
-//                    como cota minima).
+//   camara->som    = CAM_PUB + PUB_CB, e por isso e a idade dos ESCALARES com
+//                    que o bloco trabalha, nao a espera de uma nota: os doze
+//                    valores sobem pelos atomicos e o bloco le o ultimo que
+//                    passou, seja ele de ha um frame ou de ha dez. Mais o que o
+//                    driver poe depois do callback (esse ultimo nao e nosso nem
+//                    medido daqui: uma janela de saida ASIO4ALL sobre o
+//                    endpoint nao e legivel sem perguntar ao proprio driver, e o
+//                    buffer fica declarado como cota minima).
 //   nasce->nota    = NASCE_CB, que e o unico dos tres medido de ponta a ponta
 //                    sem soma: o carimbo do nascimento viaja dentro do Evento
-//                    ate ao bloco que o toca.
+//                    ate ao bloco que o toca. E decompoe-se em NASCE_PUB (o
+//                    gatilho, ate o Evento entrar no anel) + PUB_NOTA (o
+//                    transporte, o que ele la esperou), e os dois sao medidos
+//                    um por um desde o passo 62.
 //
-// O canal IDADE existe porque os seis acima comecam todos no instante em que
-// `cap.read()` voltou, e esse instante nao e o instante do pixel: entre o
+// O canal IDADE existe porque os seis que o antecedem na tabela comecam todos
+// no instante em que `cap.read()` voltou, e esse instante nao e o instante do
+// pixel: entre o
 // sensor expor e a chamada nos devolver ja la vao a transferencia e a fila do
 // backend. Era para esta linha sair de `cv::CAP_PROP_FRAME_TIMESTAMP` e nao
 // sai, por um motivo que tem de ficar escrito em vez de ser descoberto por
@@ -116,6 +136,7 @@ enum CvSyncCanal {
 	CSYNC_NASCE_CB,
 	CSYNC_NASCE_PUB,
 	CSYNC_IDADE,
+	CSYNC_PUB_NOTA,
 
 	CSYNC_N
 };
@@ -161,6 +182,11 @@ public:
 	void cbFim(long long t);
 	// Uma nota nasceu deste nascimento e saiu neste instante.
 	void nota(long long nasceUs, long long t);
+
+	// Um Evento especifico esperou ate este instante no anel. `pubUs` e o carimbo
+	// que o proprio Evento trouxe na publicacao, e zero e o valor de "a sonda
+	// nao estava armada": sem amostra, nao com amostra zero.
+	void transporte(long long pubUs, long long t);
 
 	// ----- main thread, dentro do publish -----
 	// O nascimento acabou de virar um Evento da fila. E o mesmo numero do
@@ -270,8 +296,13 @@ private:
 	double janelaS_;
 
 	// as duas notas, escritas uma vez por janela e lidas em cada frame. O `tick_`
-	// cresceu com o setimo canal e com a linha da rajada: os sete canais com
-	// delta sao ~520 caracteres, e a composta com a idade sao ~420.
+	// cresceu com o setimo canal e com a linha da rajada, e o oitavo trouxe a
+	// decomposicao medida, que e mais texto do que o `3xswap` estimava: os oito
+	// canais com delta sao ~595 caracteres, a composta com a idade, os escalares
+	// e o `decomposto` ~640, o CICLO com a histograma ~175 e os dois avisos ~250,
+	// o que da ~1710 dos 2048 com o relogio e o vsync. Truncar uma nota de cinco
+	// em cinco segundos nao e perigoso, mas ler uma linha a meio e o que faz uma
+	// medida mentir por omissao - por isso o tamanho vai escrito com a conta.
 	char tick_[2048];
 	char hud_[256];
 
