@@ -1,6 +1,7 @@
 #include "audioEngine.h"
 #include "syncProbe.h"
 #include "RtAudio.h"
+#include "appLog.h"
 
 #include <direct.h>
 #include <chrono>
@@ -58,12 +59,10 @@
 
 namespace {
 
-	// O escritor proprio, pelo mesmo motivo das sondas: a escrita do log do OF
-	// derruba esta build, e um motor que nao abriu tem de dizer isso num lugar
-	// que sobreviva a ele proprio.
+	// Usa o escritor compartilhado para que os erros do motor tambem persistam
+	// no arquivo de diagnostico.
 	void aeLog(const std::string& s) {
-		fprintf(stderr, "[audio-eng] %s\n", s.c_str());
-		fflush(stderr);
+		cv0log::write("audio-eng", s);
 	}
 
 	std::string envStr(const char* name) {
@@ -597,8 +596,8 @@ namespace {
 		// valer zero - e se nao valer, o clip do teto nao esta a segurar nada.
 		// O salto vem nas duas metades: na cena da rampa, a segunda metade e a
 		// do corte, e e la que um clique existiria.
-		fprintf(stderr, "[audio-eng]   TESTE %-24s %5.1f s | pico %.4f (%.1f dBFS)"
-			" | rms %.4f | fora do teto %ld | acima de 0 %ld | salto %.5f/%.5f\n",
+		cv0log::printfLine("audio-eng", "  TESTE %-24s %5.1f s | pico %.4f (%.1f dBFS)"
+			" | rms %.4f | fora do teto %ld | acima de 0 %ld | salto %.5f/%.5f",
 			c.nome, c.seg, pico,
 			pico > 1e-9 ? 20.0 * log10(pico) : -99.0,
 			n > 0 ? sqrt(somaQ / (double)n) : 0.0, ceifTeto, ceif, saltoA, saltoB);
@@ -610,13 +609,12 @@ namespace {
 		// ao corte e do tamanho do salto da primeira metade, e a inclinacao da
 		// propria onda a passar por ali e nao ha clique nenhum.
 		if (c.cortaA_meio) {
-			fprintf(stderr, "[audio-eng]     rampa | maior salto da 2a metade %.5f"
+			cv0log::printfLine("audio-eng", "    rampa | maior salto da 2a metade %.5f"
 				" em t=%.4f s (corte em %.4f) | na fronteira de bloco %.5f"
-				" | cauda depois de %.3f s %.5f | ga no fim %.4f\n",
+				" | cauda depois de %.3f s %.5f | ga no fim %.4f",
 				saltoB, tSaltoB, c.seg * 0.5, saltoFronteiraB, tCauda,
 				saltoCaudaB, st.autoGain);
 		}
-		fflush(stderr);
 	}
 
 	void testeOffline(const std::string& pedido) {

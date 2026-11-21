@@ -44,8 +44,9 @@ Consequencia pratica, e a razao deste arquivo existir:
   loga em nivel nao-silente mata o app na primeira mensagem, e a morte acontece
   dentro do codigo do addon, nao no nosso.
 - Nada de contar com `ofLog` para diagnosticar dependencia nova. O canal que
-  funciona e `cv0Log` (stderr sem buffer, `ofApp.cpp:40`), e as notas que o HUD
-  mostra.
+  funciona e `cv0Log` (stderr sem buffer e arquivo em
+  `bin\data\recordings\diagnostico_*.log`, `ofApp.cpp`); os escritores de audio
+  e MIDI compartilham o mesmo destino. As notas tambem aparecem no HUD.
 - O `OF_LOG_SILENT` de `main.cpp:11` **nao e burocracia**: e o que segura o app
   de pe. Trocar por qualquer nivel visivel e pedir o crash.
 - Causa-raiz ainda nao apurada. O proximo passo e dentro de

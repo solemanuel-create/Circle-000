@@ -1,8 +1,10 @@
 #include "ofApp.h"
 #include "cvDevices.h"
+#include "appLog.h"
 
 #include <cstdarg>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <thread>
@@ -24,11 +26,20 @@ namespace {
 
 	// O log proprio do openFrameworks derruba esta build: ofLogNotice morre na
 	// primeira chamada mesmo com o link limpo, provado por marcadores antes e
-	// depois de cada etapa. Toda diagnostica sai por stderr, que nao tem buffer
-	// e sobrevive ao crash.
+	// depois de cada etapa. A diagnostica sai sem buffer para stderr e tambem
+	// para o arquivo persistente do app.
 	void cv0Log(const char* tag, const string& msg) {
-		fprintf(stderr, "[%s] %s\n", tag, msg.c_str());
-		fflush(stderr);
+		cv0log::write(tag, msg);
+	}
+
+	string uniqueRecordingPath(const string& folder, const string& prefix, const string& extension) {
+		const string stamp = ofGetTimestampString("%Y%m%d_%H%M%S");
+		for (int suffix = 0; ; ++suffix) {
+			string name = prefix + "_" + stamp;
+			if (suffix > 0) name += "_" + ofToString(suffix);
+			const string path = (std::filesystem::path(folder) / (name + extension)).string();
+			if (!std::filesystem::exists(path)) return path;
+		}
 	}
 
 	// Um frame isolado nao pode enganar a leitura em cena: o primeiro depois
@@ -99,6 +110,21 @@ void ofApp::logProbe() {
 
 // =========================
 void ofApp::setup() {
+
+	recordingsDir = ofToDataPath("recordings", true);
+	std::error_code dirError;
+	std::filesystem::create_directories(recordingsDir, dirError);
+	if (dirError) {
+		cv0Log("erro", "nao criou a pasta de registros " + recordingsDir + ": " + dirError.message());
+	} else {
+		const string logPath = uniqueRecordingPath(recordingsDir, "diagnostico", ".log");
+		string logError;
+		if (cv0log::openFile(logPath, logError)) {
+			cv0Log("log", "diagnostico sendo gravado em " + logPath);
+		} else {
+			cv0Log("erro", logError);
+		}
+	}
 
 	logProbe();
 
@@ -625,6 +651,10 @@ void ofApp::exit() {
 	// fica vivo depois do fecho da janela deixa a proxima instancia muda, e o
 	// motorista continua a chamar um callback cujo contexto ja foi destruido
 	audioEngine.close();
+
+	stopProcessedRecording();
+	cv0Log("log", "encerrando o aplicativo");
+	cv0log::closeFile();
 }
 
 // =========================
@@ -1205,6 +1235,8 @@ void ofApp::draw() {
 		fx.end();
 	}
 
+	recordProcessedFrame();
+
 	ofSetColor(255);
 	if (fbo.isAllocated()) {
 		fbo.draw(space.fit.x, space.fit.y, space.fit.width, space.fit.height);
@@ -1217,6 +1249,101 @@ void ofApp::draw() {
 	// verdade ao monitor - por isso o `camara->tela` desta sonda e um intervalo
 	// e nao um ponto.
 	if (syncAtiva) syncProbe.drawFim(CvSyncProbe::agora());
+}
+
+// =========================
+bool ofApp::startProcessedRecording() {
+
+	if (recordingVideo) return true;
+	if (!shaderOk || !fbo.isAllocated()) {
+		keyNote = "F5: video indisponivel - render ainda nao esta pronto";
+		cv0Log("aviso", keyNote);
+		return false;
+	}
+
+	processedSourceWidth = (int)fbo.getWidth();
+	processedSourceHeight = (int)fbo.getHeight();
+	processedVideoWidth = processedSourceWidth & ~1;
+	processedVideoHeight = processedSourceHeight & ~1;
+	if (processedVideoWidth <= 0 || processedVideoHeight <= 0) {
+		keyNote = "F5: tamanho de video invalido";
+		cv0Log("erro", keyNote);
+		return false;
+	}
+
+	processedVideoPath = uniqueRecordingPath(recordingsDir, "video_processado", ".avi");
+	float fps = ofGetFrameRate();
+	if (fps < 1.0f || fps > 120.0f) fps = (float)MAX(1, params.camFps);
+
+	try {
+		if (!processedWriter.open(processedVideoPath,
+			cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps,
+			cv::Size(processedVideoWidth, processedVideoHeight), true)) {
+			processedWriter.release();
+			keyNote = "F5: OpenCV nao abriu o gravador MJPG";
+			cv0Log("erro", keyNote + " | " + processedVideoPath);
+			return false;
+		}
+	} catch (const cv::Exception& e) {
+		processedWriter.release();
+		keyNote = "F5: erro ao iniciar gravacao";
+		cv0Log("erro", keyNote + " | " + e.what());
+		return false;
+	}
+
+	processedVideoFrames = 0;
+	recordingVideo = true;
+	keyNote = "gravacao iniciada: " + processedVideoPath;
+	cv0Log("video", keyNote + " | MJPG " + ofToString(fps, 1) + " fps");
+	return true;
+}
+
+// =========================
+void ofApp::stopProcessedRecording() {
+
+	if (!processedWriter.isOpened()) {
+		recordingVideo = false;
+		return;
+	}
+
+	processedWriter.release();
+	recordingVideo = false;
+	keyNote = "gravacao finalizada: " + processedVideoPath;
+	cv0Log("video", keyNote + " | quadros " + std::to_string(processedVideoFrames));
+}
+
+// =========================
+void ofApp::recordProcessedFrame() {
+
+	if (!recordingVideo || !processedWriter.isOpened() || !fbo.isAllocated()) return;
+	if ((int)fbo.getWidth() != processedSourceWidth
+		|| (int)fbo.getHeight() != processedSourceHeight) {
+		cv0Log("aviso", "gravacao interrompida: a resolucao do render mudou");
+		stopProcessedRecording();
+		return;
+	}
+
+	try {
+		fbo.readToPixels(processedPixels);
+		if (processedPixels.getWidth() < processedVideoWidth
+			|| processedPixels.getHeight() < processedVideoHeight
+			|| processedPixels.getNumChannels() != 4) {
+			cv0Log("erro", "formato inesperado ao ler o quadro processado para gravacao");
+			stopProcessedRecording();
+			return;
+		}
+
+		processedPixels.mirror(true, false);
+		cv::Mat rgba((int)processedPixels.getHeight(), (int)processedPixels.getWidth(),
+			CV_8UC4, processedPixels.getData());
+		cv::Mat bgr = rgba(cv::Rect(0, 0, processedVideoWidth, processedVideoHeight));
+		cv::cvtColor(bgr, processedBgr, cv::COLOR_RGBA2BGR);
+		processedWriter.write(processedBgr);
+		++processedVideoFrames;
+	} catch (const cv::Exception& e) {
+		cv0Log("erro", "gravacao de video interrompida: " + string(e.what()));
+		stopProcessedRecording();
+	}
 }
 
 // =========================
@@ -1298,6 +1425,8 @@ void ofApp::drawOverlay() {
 	int y = 20;
 	hudDraw(y, "", "Ctrl-v-0  |  medicao", strlen("Ctrl-v-0  |  medicao"));
 	hudDraw(y, "", hudTxt_, hudFmt("%.1f fps  |  blobs %d", ofGetFrameRate(), activeBlobs));
+	hudDraw(y, "", recordingVideo ? "  VIDEO: GRAVANDO (F5 para parar)" : "  VIDEO: parado (F5 para gravar)",
+		recordingVideo ? strlen("  VIDEO: GRAVANDO (F5 para parar)") : strlen("  VIDEO: parado (F5 para gravar)"));
 	// "ligacoes" e o numero que prova a tecla repetida: se ela sobe a cada F2,
 	// o palco esta pagando o cold start de novo; se fica, a tecla nao fez nada.
 	hudDraw(y, "", hudTxt_,
@@ -1444,6 +1573,8 @@ void ofApp::drawOverlay() {
 	ofDrawBitmapString("  b refaz o fundo   r reseed   a novo rect", panelX, cy);
 	cy += 13;
 	ofDrawBitmapString("  p dialog ISO (so DSHOW)   s grava png", panelX, cy);
+	cy += 13;
+	ofDrawBitmapString("  F5 grava video processado (AVI/MJPG)", panelX, cy);
 	cy += 13;
 	ofDrawBitmapString("  o corta o cabo midi (a porta fica aberta)", panelX, cy);
 	cy += 13;
@@ -1652,6 +1783,11 @@ void ofApp::keyPressed(int key) {
 
 	if (key == 's') {
 		ofSaveScreen("cv0_" + ofToString(ofGetFrameNum()) + ".png");
+	}
+
+	if (key == OF_KEY_F5) {
+		if (recordingVideo) stopProcessedRecording();
+		else startProcessedRecording();
 	}
 
 	// O cabo desliga-se sem se fechar: a porta continua aberta e os valores que

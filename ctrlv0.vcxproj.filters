@@ -50,6 +50,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\appLog.h">
+      <Filter>src</Filter>
+    </ClInclude>
     <ClInclude Include="src\ofApp.h">
       <Filter>src</Filter>
     </ClInclude>

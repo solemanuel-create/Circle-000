@@ -1,4 +1,5 @@
 #include "midiProbe.h"
+#include "appLog.h"
 
 #include <windows.h>
 #include <mmsystem.h>
@@ -14,12 +15,10 @@
 
 namespace {
 
-	// O escritor proprio, pelo mesmo motivo da sonda de audio: o log do OF nesta
-	// build mata o processo na primeira escrita e o cv0Log do ofApp e local
-	// aquele ficheiro.
+	// Usa o escritor compartilhado para persistir as sondas MIDI junto ao
+	// restante diagnostico.
 	void mpLog(const std::string& s) {
-		fprintf(stderr, "[midi] %s\n", s.c_str());
-		fflush(stderr);
+		cv0log::write("midi", s);
 	}
 
 	const int MSGS = 24;

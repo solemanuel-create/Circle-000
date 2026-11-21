@@ -280,6 +280,7 @@
     <ClCompile Include="src\syncProbe.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\appLog.h" />
     <ClInclude Include="src\audioEngine.h" />
     <ClInclude Include="src\audioProbe.h" />
     <ClInclude Include="src\blobModel.h" />

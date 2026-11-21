@@ -1,4 +1,5 @@
 #include "midiOut.h"
+#include "appLog.h"
 
 #include <windows.h>
 #include <mmsystem.h>
@@ -12,12 +13,9 @@
 
 namespace {
 
-	// O escritor proprio, pelo mesmo motivo das duas sondas: a escrita do log do
-	// OF derruba esta build, e uma saida de controle que nao abre tem que dizer
-	// isso em algum lugar que sobreviva a ela propria.
+	// Registra erros da saida de controle na consola e no arquivo compartilhado.
 	void moLog(const std::string& s) {
-		fprintf(stderr, "[midi-out] %s\n", s.c_str());
-		fflush(stderr);
+		cv0log::write("midi-out", s);
 	}
 
 	std::string lower(std::string s) {

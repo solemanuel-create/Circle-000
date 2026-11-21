@@ -1,5 +1,6 @@
 #include "audioProbe.h"
 #include "RtAudio.h"
+#include "appLog.h"
 
 #include <algorithm>
 #include <atomic>
@@ -19,12 +20,10 @@ long ASIOControlPanel();
 
 namespace {
 
-	// Cada linha sai por stderr assim que existe. O cv0Log do ofApp e local
-	// aquele ficheiro e o log do OF nesta build mata o processo na primeira
-	// escrita (ver main.cpp), entao a sonda traz o seu proprio escritor.
+	// Cada linha sai imediatamente na consola e no arquivo de diagnostico
+	// compartilhado; nao passa pelo log do openFrameworks (ver main.cpp).
 	void apLog(const std::string& s) {
-		fprintf(stderr, "[audio] %s\n", s.c_str());
-		fflush(stderr);
+		cv0log::write("audio", s);
 	}
 
 	// Uma rota pode derrubar o processo. Sem impressao incremental o que ja

@@ -20,10 +20,12 @@ de 160-1280 px de largura, nunca na resolucao da tela.
   `ndi`. Sem argumento o app usa a fonte que o codigo dele escolhe sozinho.
 - o exe e `bin\ctrlv0.exe`. Debug|x64 gera `bin\ctrlv0_debug.exe`.
 
-**A diagnostica sai por stderr, nao pelo log do openFrameworks.** Nesta build a
+**A diagnostica sai por stderr e tambem fica em `bin\data\recordings\diagnostico_*.log`,
+nao pelo log do openFrameworks.** Nesta build a
 *escrita* do log do OF derruba o processo em `c0000005` na primeira linha
 escrita - medido, nao presumido (ver `DEPENDENCIAS.md` secao 0). Por isso `main.cpp`
-poe `OF_LOG_SILENT` e todo aviso do projeto passa por `cv0Log`. Nenhuma
+poe `OF_LOG_SILENT` e os avisos passam pelos escritores do app em `appLog.h`.
+Nenhuma
 dependencia nova pode logar ate a causa raiz ser achada.
 
 ## Compilar
@@ -62,7 +64,12 @@ O painel direito do HUD e gerado a partir da mesma tabela que as teclas usam
 | `a` | novo retangulo |
 | `p` | dialog de ISO/exposicao do driver |
 | `s` | salva `cv0_<frame>.png` |
+| `F5` | inicia/para video processado em AVI/MJPG |
 | `u` | mudo do som **por rampa de 0,12 s**, nunca por ganho a zero no meio do periodo; a rota ASIO fica aberta e o motorista continua a vir |
+
+Os videos sao gravados sob demanda em `bin\data\recordings\video_processado_*.avi`.
+O conteudo e o frame do render (sem HUD e sem overlay); os arquivos de diagnostico
+incluem os eventos de camera, audio e MIDI, com escrita tambem na consola.
 
 Tecla de fonte que nao muda nada nao paga uma ligacao: reabrir o que ja esta
 entregando frame seria ate 25 s de sensor morto no meio de um show. A reserva

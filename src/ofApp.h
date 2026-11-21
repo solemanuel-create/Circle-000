@@ -3,6 +3,7 @@
 #include "ofMain.h"
 #include "ofxOpenCv.h"
 #include "kinect1473.h"
+#include <opencv2/videoio.hpp>
 
 #include "cvModel.h"
 #include "cvSpace.h"
@@ -97,6 +98,9 @@ public:
 	int activeBlobs = 0;
 
 	void drawOverlay();
+	bool startProcessedRecording();
+	void stopProcessedRecording();
+	void recordProcessedFrame();
 
 	// As pecas do HUD sem alocacao. hudFmt escreve na hudTxt_ e devolve o
 	// comprimento do que coube (o _TRUNCATE e o que impede o abort do sprintf_s
@@ -139,7 +143,18 @@ public:
 	// frames reais, entao a entrada passa por ele e os nomes vem das duas
 	// enumeracoes proprias que os backends usam por baixo (cvDevices.cpp).
 	cv::VideoCapture cap;
+	cv::VideoWriter processedWriter;
 	cv::Mat mFrame, mRgb;
+	cv::Mat processedBgr;
+	ofPixels processedPixels;
+	std::string recordingsDir;
+	std::string processedVideoPath;
+	bool recordingVideo = false;
+	int processedSourceWidth = 0;
+	int processedSourceHeight = 0;
+	int processedVideoWidth = 0;
+	int processedVideoHeight = 0;
+	unsigned long long processedVideoFrames = 0;
 	ofTexture texLive;
 	// as duas listas vivem lado a lado porque sao duas enumeracoes diferentes do
 	// mesmo hardware: DSHOW e MSMF numeram cada uma do seu jeito e um indice

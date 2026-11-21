@@ -7,7 +7,7 @@ int main( ){
 	//Use ofGLFWWindowSettings for more options like multi-monitor fullscreen
 	// Esta build do core morre na primeira escrita de log de qualquer nivel
 	// (tambem dentro dos addons: ofxCvGrayscaleImage::setFromPixels loga ao
-	// alocar). O silencio e global e a diagnostica do app sai por stderr.
+	// alocar). O silencio e global; a diagnostica do app sai por stderr e arquivo.
 	ofSetLogLevel(OF_LOG_SILENT);
 
 	ofGLWindowSettings settings;
